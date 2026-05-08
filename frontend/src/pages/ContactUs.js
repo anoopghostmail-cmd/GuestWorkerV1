@@ -120,9 +120,9 @@ export default function ContactUs() {
     {
       icon: Phone,
       title: 'Phone Support',
-      value: '+91-XXX-XXX-XXXX',
+      value: '+91 73395 57802',
       description: 'Call us during business hours',
-      link: 'tel:+91XXXXXXXXXX',
+      link: 'tel:+917339557802',
       color: 'from-green-500 to-emerald-500'
     },
     {

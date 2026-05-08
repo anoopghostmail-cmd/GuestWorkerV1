@@ -774,7 +774,7 @@ export default function Landing() {
                 </li>
                 <li className="flex items-center gap-2">
                   <Phone className="h-4 w-4 text-[#22D3EE]" />
-                  <span className="text-sm">+91 XXXXX XXXXX</span>
+                  <a href="tel:+917339557802" className="text-sm hover:text-[#22D3EE] transition-colors">+91 73395 57802</a>
                 </li>
                 <li className="flex items-center gap-2">
                   <MapPin className="h-4 w-4 text-[#22D3EE]" />
