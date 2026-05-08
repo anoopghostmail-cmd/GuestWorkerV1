@@ -167,7 +167,7 @@ app.add_middleware(
 async def send_attendance_alerts_once():
     try:
         today_str = datetime.now(timezone.utc).astimezone().date().isoformat()
-        users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(100000)
+        users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(1000)
         if not users:
             return
         user_ids = [u["id"] for u in users]

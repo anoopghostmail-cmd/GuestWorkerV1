@@ -83,10 +83,7 @@ android-sdk/frontend/node_modules/.cache/default-development/0.pack
 frontend/node_modules/.cache/default-development/0.pack
 frontend/node_modules/.cache/default-development/2.pack_
 -e 
-# Environment and credential files
-.env
-.env.*
-*.env
+# Environment and credential files (NOTE: .env files needed at deploy time, do not block)
 credentials.json
 *.pem
 *.key
