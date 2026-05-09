@@ -1540,42 +1540,64 @@ async def get_current_admin(request: Request, auth_token: str = Cookie(None)):
 
 async def seed_admin():
     """
-    Create initial admin account from environment variables on first startup.
+    Create or sync admin account from environment variables on every startup.
     SECURITY: Admin credentials MUST be set in .env file, never hardcoded.
+
+    Behavior:
+    - If admin doesn't exist → create with ADMIN_PASSWORD, force-change-password ON.
+    - If admin exists → update its password hash to match ADMIN_PASSWORD, clear any
+      lockouts, and turn must_change_password OFF. This makes the .env file the
+      single source of truth for the admin password and lets the operator rotate
+      the password by editing .env and redeploying. Critical for deployments where
+      a different DB is provisioned per environment (so the password set during
+      first deploy can be rotated later).
     """
     admin_email = os.environ.get('ADMIN_EMAIL')
     admin_password = os.environ.get('ADMIN_PASSWORD')
-    
+
     # Skip if admin credentials not configured
     if not admin_email or not admin_password:
         logging.warning("ADMIN_EMAIL and ADMIN_PASSWORD not set in environment variables. Skipping admin creation.")
         return
-    
-    # Check if admin already exists
-    admin_exists = await db.admins.find_one({"email": admin_email})
-    if admin_exists:
-        logging.info(f"Admin account already exists: {admin_email}")
-        return
-    
+
     # Validate password strength
     if len(admin_password) < 8:
         logging.error("ADMIN_PASSWORD must be at least 8 characters long")
         return
-    
+
+    new_hash = pwd_context.hash(admin_password)
+
+    # Check if admin already exists → sync password & clear lockouts
+    admin_exists = await db.admins.find_one({"email": admin_email})
+    if admin_exists:
+        await db.admins.update_one(
+            {"email": admin_email},
+            {"$set": {
+                "password": new_hash,
+                "is_active": True,
+                "must_change_password": False,
+                "is_locked": False,
+                "failed_login_attempts": 0,
+                "locked_until": None,
+            }}
+        )
+        logging.info(f"✅ Admin password synced from env: {admin_email}")
+        return
+
     # Create admin account
     admin = {
         'id': 'admin-' + os.urandom(8).hex(),
         'email': admin_email,
-        'password': pwd_context.hash(admin_password),
+        'password': new_hash,
         'name': 'System Admin',
         'role': 'admin',
         'is_active': True,
         'created_at': datetime.now(timezone.utc).isoformat(),
-        'must_change_password': True  # Force password change on first login
+        'must_change_password': False
     }
-    
+
     await db.admins.insert_one(admin)
-    logging.info(f"✅ Admin account created: {admin_email} (Password change required on first login)")
+    logging.info(f"✅ Admin account created: {admin_email}")
 
 # ============ AUTH ROUTES ============
 
