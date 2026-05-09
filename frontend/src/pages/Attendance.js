@@ -738,39 +738,41 @@ export default function Attendance() {
   };
 
   const calculateExpectedCommission = () => {
+    const additionalCharges = parseFloat(employerForm.additional_charges || 0);
+    const additionalAsCommission = !!employerForm.additional_charges_as_commission;
+    const extraPaymentPerWorker = parseFloat(employerForm.extra_payment_per_worker || 0);
+    const additionalCommissionPart = additionalAsCommission ? additionalCharges : 0;
+
+    // PRIORITY 1: Specific workers selected → ALWAYS use each worker's profile rates
+    // (ignore form's payment_per_worker which is auto-filled from preferences default).
+    // Extra payment is pass-through (paid by employer, received by worker) so it cancels in commission.
+    if (employerForm.selected_workers && employerForm.selected_workers.length > 0) {
+      const selectedWorkersData = workers.filter(w => employerForm.selected_workers.includes(w.id));
+      const baseCommission = selectedWorkersData.reduce((sum, worker) => {
+        return sum + ((worker.wage_from_employer || 0) - (worker.wage_per_day || 0));
+      }, 0);
+      return baseCommission + additionalCommissionPart;
+    }
+
+    // PRIORITY 2: No specific workers but payment_per_worker entered →
+    // defaults are NOT used; full payment_per_worker is treated as commission (× count),
+    // since wage_to_worker is unknown. Extra is pass-through.
     if (employerForm.payment_per_worker && parseFloat(employerForm.payment_per_worker) > 0) {
       const paymentPerWorker = parseFloat(employerForm.payment_per_worker);
       const workersCount = parseInt(employerForm.workers_count || 0);
-      const totalAmountFromEmployer = paymentPerWorker * workersCount;
-      
-      if (employerForm.selected_workers && employerForm.selected_workers.length > 0) {
-        const selectedWorkersData = workers.filter(w => employerForm.selected_workers.includes(w.id));
-        const totalWagePaid = selectedWorkersData.reduce((sum, worker) => sum + (worker.wage_per_day || 0), 0);
-        return totalAmountFromEmployer - totalWagePaid;
-      } else if (workersCount === workers.length && workers.length > 0) {
-        const totalWagePaid = workers.reduce((sum, worker) => sum + (worker.wage_per_day || 0), 0);
-        return totalAmountFromEmployer - totalWagePaid;
-      } else if (workersCount > 0) {
-        const defaultWage = preferences.default_worker_wage || 450;
-        const estimatedTotalWage = defaultWage * workersCount;
-        return totalAmountFromEmployer - estimatedTotalWage;
-      }
+      // (payment + extra) - (0 + extra) = payment, per worker
+      return (paymentPerWorker * workersCount) + additionalCommissionPart;
     }
-    
-    if (employerForm.selected_workers && employerForm.selected_workers.length > 0) {
-      const selectedWorkersData = workers.filter(w => employerForm.selected_workers.includes(w.id));
-      return selectedWorkersData.reduce((sum, worker) => {
-        return sum + ((worker.wage_from_employer || 500) - (worker.wage_per_day || 0));
-      }, 0);
-    }
-    
+
+    // PRIORITY 3: workers_count == all active workers → use everyone's profile rates
     if (parseInt(employerForm.workers_count || 0) === workers.length && workers.length > 0) {
-      return workers.reduce((sum, worker) => {
-        return sum + ((worker.wage_from_employer || 500) - (worker.wage_per_day || 0));
+      const baseCommission = workers.reduce((sum, worker) => {
+        return sum + ((worker.wage_from_employer || 0) - (worker.wage_per_day || 0));
       }, 0);
+      return baseCommission + additionalCommissionPart;
     }
-    
-    return 0;
+
+    return additionalCommissionPart;
   };
 
   const getUnmarkedWorkers = () => {

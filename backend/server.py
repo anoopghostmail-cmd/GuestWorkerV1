@@ -7436,12 +7436,12 @@ async def create_bulk_attendance(
             
             # ✅ PRIORITY 1: If specific workers are selected, use their individual wage_from_employer rates
             if employer_entry.selected_workers and len(employer_entry.selected_workers) > 0:
-                # Sum individual worker rates from employer
+                # Sum individual worker rates from employer (defaults / payment_per_worker NOT used here)
                 total_from_workers = 0.0
                 for worker_id in employer_entry.selected_workers:
                     worker = await db.workers.find_one({"id": worker_id}, {"_id": 0})
                     if worker:
-                        total_from_workers += float(worker.get("wage_from_employer", 500.0))
+                        total_from_workers += float(worker.get("wage_from_employer", 0) or 0)
                 # ✅ Extra payment per worker (skill bonus) is paid by employer for each selected worker
                 extra_total = float(employer_entry.extra_payment_per_worker or 0.0) * len(employer_entry.selected_workers)
                 total_amount = total_from_workers + extra_total + employer_entry.additional_charges
@@ -7551,14 +7551,13 @@ async def create_bulk_attendance(
                     if not worker:
                         continue
 
-                    # ✅ PRIORITY: If payment_per_worker is provided, use it; otherwise use individual worker's rate
+                    # ✅ When specific workers are selected, ALWAYS use the worker's own
+                    # wage_from_employer rate. Ignore form's `payment_per_worker` (which is
+                    # often auto-filled from preferences default and would otherwise leak in
+                    # as a wrong rate). User rule: "if a specific worker is selected, the
+                    # default set wage is not used".
                     base_wage = float(worker.get("wage_per_day", 0))
-                    if employer_entry.payment_per_worker and employer_entry.payment_per_worker > 0:
-                        # Use payment_per_worker when provided
-                        base_payment_from_employer = float(employer_entry.payment_per_worker)
-                    else:
-                        # Fall back to individual worker's rate from employer (wage_from_employer)
-                        base_payment_from_employer = float(worker.get("wage_from_employer", 500.0))
+                    base_payment_from_employer = float(worker.get("wage_from_employer", 0) or 0)
 
                     # ✅ Extra per-worker bonus (e.g. skill premium): paid by employer AND received by worker
                     extra = float(employer_entry.extra_payment_per_worker or 0.0)
