@@ -7200,6 +7200,7 @@ class AttendanceEntry(BaseModel):
     additional_charges: List[Dict[str, Any]] = []
     extra_payment_per_worker: float = 0.0  # ✅ Per-worker bonus (e.g. skill premium) - paid by employer, received by worker
     extra_payment_reason: Optional[str] = None  # ✅ Reason for extra per-worker payment
+    additional_charges_as_commission: bool = False  # ✅ When True, additional_charges count toward commission
     remarks: Optional[str] = None  # ✅ Optional remarks field
     mode: str  # "employer" or "worker"
     created_by: str
@@ -7215,6 +7216,7 @@ class EmployerAttendanceEntry(BaseModel):
     charge_description: Optional[str] = None
     extra_payment_per_worker: float = 0.0  # ✅ Per-worker bonus (e.g. skill premium) - paid by employer AND received by worker
     extra_payment_reason: Optional[str] = None  # ✅ Reason for extra per-worker payment
+    additional_charges_as_commission: bool = False  # ✅ Toggle: count additional_charges as commission
     remarks: Optional[str] = None  # ✅ Optional remarks
 
 class WorkerAttendanceEntry(BaseModel):
@@ -7490,6 +7492,7 @@ async def create_bulk_attendance(
                         }] if employer_entry.additional_charges > 0 else [],
                         "extra_payment_per_worker": float(employer_entry.extra_payment_per_worker or 0.0),  # ✅ Save extra per-worker bonus
                         "extra_payment_reason": employer_entry.extra_payment_reason or "",  # ✅ Save reason
+                        "additional_charges_as_commission": bool(employer_entry.additional_charges_as_commission),  # ✅ Toggle
                         "remarks": employer_entry.remarks or "",  # ✅ Save remarks
                         "updated_at": datetime.now(timezone.utc).isoformat()
                     }}
@@ -7515,6 +7518,7 @@ async def create_bulk_attendance(
                     }] if employer_entry.additional_charges > 0 else [],
                     extra_payment_per_worker=float(employer_entry.extra_payment_per_worker or 0.0),  # ✅ Save extra per-worker bonus
                     extra_payment_reason=employer_entry.extra_payment_reason or None,  # ✅ Save reason
+                    additional_charges_as_commission=bool(employer_entry.additional_charges_as_commission),  # ✅ Toggle
                     remarks=employer_entry.remarks or "",  # ✅ Save remarks
                     mode="employer",
                     created_by=current_user.id
@@ -7660,10 +7664,12 @@ async def create_bulk_attendance(
                     }
                     await db.commissions.insert_one(commission_doc)
 
-                # ✅ ADDITIONAL CHARGES → recorded as commission (separate from per-worker commission rows)
-                # additional_charges (e.g., transport, food, lump-sum extras) is retained by the contractor
-                # and now reported as commission instead of being silently dropped.
-                if employer_entry.additional_charges and employer_entry.additional_charges > 0:
+                # ✅ ADDITIONAL CHARGES → recorded as commission ONLY when the toggle is on
+                # When `additional_charges_as_commission` is True, additional_charges count toward
+                # contractor commission. When False (default), they only inflate the employer's bill.
+                if (employer_entry.additional_charges_as_commission
+                        and employer_entry.additional_charges
+                        and employer_entry.additional_charges > 0):
                     existing_addl = await db.commissions.find_one({
                         "contractor_id": current_user.id,
                         "employer_id": employer_entry.employer_id,
@@ -7687,33 +7693,35 @@ async def create_bulk_attendance(
                     else:
                         await db.commissions.insert_one(addl_doc)
             else:
-                # ✅ When workers are NOT selected, calculate commissions using default wage from preferences
-                # Get contractor preferences to get default_worker_wage
+                # ✅ When workers are NOT selected, calculate commissions WITHOUT touching defaults
+                # if the user explicitly entered payment_per_worker. Defaults are only used as a
+                # fallback when both selected_workers and payment_per_worker are empty.
                 preference = await db.contractor_preferences.find_one({"contractor_id": current_user.id}, {"_id": 0})
-                
-                if preference:
-                    default_wage = float(preference.get("default_worker_wage", 450.0))
-                else:
-                    # If no preference exists, use default value
-                    default_wage = 450.0
-                
-                # Determine base payment_from_employer (per worker)
+
+                # ✅ Extra per-worker bonus is paid by employer AND received by worker → pass-through
+                extra = float(employer_entry.extra_payment_per_worker or 0.0)
+
                 if employer_entry.payment_per_worker and employer_entry.payment_per_worker > 0:
+                    # ✅ User explicitly entered payment_per_worker → use it as the gross collection.
+                    # No worker is specified, so wage_to_worker stays 0; the entered amount is fully
+                    # treated as commission (matches user request: "default is not used … the entered
+                    # payment per worker is used for commission calculation and all").
                     base_payment_from_employer = float(employer_entry.payment_per_worker)
+                    payment_from_employer = base_payment_from_employer + extra
+                    wage_to_worker = 0.0 + extra  # only the extra (which is pass-through to worker)
+                    commission_per_worker = max(payment_from_employer - wage_to_worker, 0.0)
                 else:
-                    # Use default employer rate from preferences
+                    # Fallback: nothing entered → use defaults from preferences
                     if preference:
+                        default_wage = float(preference.get("default_worker_wage", 450.0))
                         base_payment_from_employer = float(preference.get("default_employer_rate", 500.0))
                     else:
+                        default_wage = 450.0
                         base_payment_from_employer = 500.0
+                    payment_from_employer = base_payment_from_employer + extra
+                    wage_to_worker = default_wage + extra
+                    commission_per_worker = max(payment_from_employer - wage_to_worker, 0.0)
 
-                # ✅ Extra per-worker bonus is paid by employer AND received by worker → pass-through, no commission impact
-                extra = float(employer_entry.extra_payment_per_worker or 0.0)
-                payment_from_employer = base_payment_from_employer + extra
-                wage_to_worker = default_wage + extra
-
-                # Calculate commission per worker: payment_from_employer - wage_to_worker (extra cancels out)
-                commission_per_worker = max(payment_from_employer - wage_to_worker, 0.0)
                 total_commission = commission_per_worker * employer_entry.workers_count
 
                 # Create summary commission record (using special marker "SUMMARY" for worker_id)
@@ -7731,19 +7739,21 @@ async def create_bulk_attendance(
                         "date": date,
                         "employer_id": employer_entry.employer_id,
                         "worker_id": "SUMMARY",  # Special marker for summary record when workers not selected
-                        "payment_from_employer": payment_from_employer,  # ✅ base + extra
-                        "wage_to_worker": wage_to_worker,  # ✅ base + extra
-                        "commission_amount": total_commission,  # Total commission = (payment - wage) × workers_count
+                        "payment_from_employer": payment_from_employer,
+                        "wage_to_worker": wage_to_worker,
+                        "commission_amount": total_commission,
                         "extra_payment_per_worker": extra,
                         "extra_payment_reason": employer_entry.extra_payment_reason or None,
                         "attendance_id": employer_attendance_id if employer_attendance_id else str(uuid.uuid4()),
-                        "workers_count": employer_entry.workers_count,  # Store actual number of workers
+                        "workers_count": employer_entry.workers_count,
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
                     await db.commissions.insert_one(commission_doc)
 
-                # ✅ ADDITIONAL CHARGES → recorded as commission (separate from per-worker / SUMMARY rows)
-                if employer_entry.additional_charges and employer_entry.additional_charges > 0:
+                # ✅ ADDITIONAL CHARGES → recorded as commission ONLY when the toggle is on
+                if (employer_entry.additional_charges_as_commission
+                        and employer_entry.additional_charges
+                        and employer_entry.additional_charges > 0):
                     existing_addl = await db.commissions.find_one({
                         "contractor_id": current_user.id,
                         "employer_id": employer_entry.employer_id,

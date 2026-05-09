@@ -45,6 +45,7 @@ export default function Attendance() {
     charge_description: '',
     extra_payment_per_worker: '',
     extra_payment_reason: '',
+    additional_charges_as_commission: false,
     remarks: ''
   });
   
@@ -256,6 +257,7 @@ export default function Attendance() {
       charge_description: '',
       extra_payment_per_worker: '',
       extra_payment_reason: '',
+      additional_charges_as_commission: false,
       remarks: ''
     });
     setEditingRecord(null);
@@ -348,6 +350,7 @@ export default function Attendance() {
       charge_description: '',
       extra_payment_per_worker: '',
       extra_payment_reason: '',
+      additional_charges_as_commission: false,
       remarks: `Converted from booking`
     });
     
@@ -407,6 +410,7 @@ export default function Attendance() {
             charge_description: employerForm.charge_description || '',
             extra_payment_per_worker: parseFloat(employerForm.extra_payment_per_worker || 0),
             extra_payment_reason: employerForm.extra_payment_reason || '',
+            additional_charges_as_commission: !!employerForm.additional_charges_as_commission,
             remarks: employerForm.remarks || '',
           }],
         },
@@ -443,6 +447,7 @@ export default function Attendance() {
       charge_description: record.additional_charges?.[0]?.description || '',
       extra_payment_per_worker: extraPayment.toString(),
       extra_payment_reason: extraPaymentReason,
+      additional_charges_as_commission: !!record.additional_charges_as_commission,
       remarks: record.remarks || ''
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1429,6 +1434,24 @@ export default function Attendance() {
                             placeholder="e.g., Transport, Materials"
                             className="h-11 border-gray-300 focus:border-[#3B2ED0] focus:ring-[#3B2ED0]"
                           />
+                        </div>
+                      )}
+
+                      {parseFloat(employerForm.additional_charges || 0) > 0 && (
+                        <div className="md:col-span-2">
+                          <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors">
+                            <input
+                              type="checkbox"
+                              data-testid="additional-charges-as-commission-checkbox"
+                              checked={!!employerForm.additional_charges_as_commission}
+                              onChange={(e) => handleEmployerFormChange('additional_charges_as_commission', e.target.checked)}
+                              className="mt-1 h-4 w-4 rounded border-amber-400 text-[#3B2ED0] focus:ring-[#3B2ED0]"
+                            />
+                            <div>
+                              <div className="text-sm font-semibold text-amber-900">Count this additional charge as commission</div>
+                              <div className="text-xs text-amber-800 mt-0.5">When ticked, the ₹{parseFloat(employerForm.additional_charges || 0).toFixed(0)} additional charge will be added to your commission report. If unticked, it only inflates the employer's bill but is not reported as commission.</div>
+                            </div>
+                          </label>
                         </div>
                       )}
 
