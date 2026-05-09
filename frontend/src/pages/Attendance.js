@@ -755,13 +755,13 @@ export default function Attendance() {
     }
 
     // PRIORITY 2: No specific workers but payment_per_worker entered →
-    // defaults are NOT used; full payment_per_worker is treated as commission (× count),
-    // since wage_to_worker is unknown. Extra is pass-through.
+    // commission per worker = payment_per_worker - default_worker_wage. Extras are pass-through.
     if (employerForm.payment_per_worker && parseFloat(employerForm.payment_per_worker) > 0) {
       const paymentPerWorker = parseFloat(employerForm.payment_per_worker);
       const workersCount = parseInt(employerForm.workers_count || 0);
-      // (payment + extra) - (0 + extra) = payment, per worker
-      return (paymentPerWorker * workersCount) + additionalCommissionPart;
+      const defaultWage = parseFloat(preferences.default_worker_wage || 0);
+      const perWorker = Math.max(paymentPerWorker - defaultWage, 0);
+      return (perWorker * workersCount) + additionalCommissionPart;
     }
 
     // PRIORITY 3: workers_count == all active workers → use everyone's profile rates

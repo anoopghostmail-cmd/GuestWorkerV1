@@ -7692,34 +7692,30 @@ async def create_bulk_attendance(
                     else:
                         await db.commissions.insert_one(addl_doc)
             else:
-                # ✅ When workers are NOT selected, calculate commissions WITHOUT touching defaults
-                # if the user explicitly entered payment_per_worker. Defaults are only used as a
-                # fallback when both selected_workers and payment_per_worker are empty.
+                # ✅ When workers are NOT selected:
+                # - payment_from_employer = entered payment_per_worker (or default_employer_rate)
+                # - wage_to_worker = default_worker_wage from preferences (only sensible value
+                #   when no specific worker is known)
+                # - commission per worker = payment_from_employer - default_worker_wage
                 preference = await db.contractor_preferences.find_one({"contractor_id": current_user.id}, {"_id": 0})
+                if preference:
+                    default_wage = float(preference.get("default_worker_wage", 450.0))
+                    default_employer_rate = float(preference.get("default_employer_rate", 500.0))
+                else:
+                    default_wage = 450.0
+                    default_employer_rate = 500.0
 
-                # ✅ Extra per-worker bonus is paid by employer AND received by worker → pass-through
+                # Extra per-worker bonus: paid by employer AND received by worker → pass-through, cancels in commission
                 extra = float(employer_entry.extra_payment_per_worker or 0.0)
 
                 if employer_entry.payment_per_worker and employer_entry.payment_per_worker > 0:
-                    # ✅ User explicitly entered payment_per_worker → use it as the gross collection.
-                    # No worker is specified, so wage_to_worker stays 0; the entered amount is fully
-                    # treated as commission (matches user request: "default is not used … the entered
-                    # payment per worker is used for commission calculation and all").
                     base_payment_from_employer = float(employer_entry.payment_per_worker)
-                    payment_from_employer = base_payment_from_employer + extra
-                    wage_to_worker = 0.0 + extra  # only the extra (which is pass-through to worker)
-                    commission_per_worker = max(payment_from_employer - wage_to_worker, 0.0)
                 else:
-                    # Fallback: nothing entered → use defaults from preferences
-                    if preference:
-                        default_wage = float(preference.get("default_worker_wage", 450.0))
-                        base_payment_from_employer = float(preference.get("default_employer_rate", 500.0))
-                    else:
-                        default_wage = 450.0
-                        base_payment_from_employer = 500.0
-                    payment_from_employer = base_payment_from_employer + extra
-                    wage_to_worker = default_wage + extra
-                    commission_per_worker = max(payment_from_employer - wage_to_worker, 0.0)
+                    base_payment_from_employer = default_employer_rate
+
+                payment_from_employer = base_payment_from_employer + extra
+                wage_to_worker = default_wage + extra
+                commission_per_worker = max(payment_from_employer - wage_to_worker, 0.0)
 
                 total_commission = commission_per_worker * employer_entry.workers_count
 
