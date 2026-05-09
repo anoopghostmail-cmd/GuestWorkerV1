@@ -7198,6 +7198,8 @@ class AttendanceEntry(BaseModel):
     wage_amount: float = 0.0
     payment_per_worker: Optional[float] = None  # ✅ Payment per worker for employer-based attendance (when workers not selected)
     additional_charges: List[Dict[str, Any]] = []
+    extra_payment_per_worker: float = 0.0  # ✅ Per-worker bonus (e.g. skill premium) - paid by employer, received by worker
+    extra_payment_reason: Optional[str] = None  # ✅ Reason for extra per-worker payment
     remarks: Optional[str] = None  # ✅ Optional remarks field
     mode: str  # "employer" or "worker"
     created_by: str
@@ -7211,6 +7213,8 @@ class EmployerAttendanceEntry(BaseModel):
     payment_per_worker: float = 500.0
     additional_charges: float = 0.0
     charge_description: Optional[str] = None
+    extra_payment_per_worker: float = 0.0  # ✅ Per-worker bonus (e.g. skill premium) - paid by employer AND received by worker
+    extra_payment_reason: Optional[str] = None  # ✅ Reason for extra per-worker payment
     remarks: Optional[str] = None  # ✅ Optional remarks
 
 class WorkerAttendanceEntry(BaseModel):
@@ -7436,14 +7440,18 @@ async def create_bulk_attendance(
                     worker = await db.workers.find_one({"id": worker_id}, {"_id": 0})
                     if worker:
                         total_from_workers += float(worker.get("wage_from_employer", 500.0))
-                total_amount = total_from_workers + employer_entry.additional_charges
+                # ✅ Extra payment per worker (skill bonus) is paid by employer for each selected worker
+                extra_total = float(employer_entry.extra_payment_per_worker or 0.0) * len(employer_entry.selected_workers)
+                total_amount = total_from_workers + extra_total + employer_entry.additional_charges
             # ✅ PRIORITY 2: If payment_per_worker is provided and no specific workers selected, use it
             elif employer_entry.payment_per_worker and employer_entry.payment_per_worker > 0:
                 # Use manual payment_per_worker * count
-                total_amount = (employer_entry.workers_count * employer_entry.payment_per_worker) + employer_entry.additional_charges
+                extra_total = float(employer_entry.extra_payment_per_worker or 0.0) * employer_entry.workers_count
+                total_amount = (employer_entry.workers_count * employer_entry.payment_per_worker) + extra_total + employer_entry.additional_charges
             else:
                 # Fallback: Use manual payment_per_worker * count (even if 0)
-                total_amount = (employer_entry.workers_count * (employer_entry.payment_per_worker or 0)) + employer_entry.additional_charges
+                extra_total = float(employer_entry.extra_payment_per_worker or 0.0) * employer_entry.workers_count
+                total_amount = (employer_entry.workers_count * (employer_entry.payment_per_worker or 0)) + extra_total + employer_entry.additional_charges
 
             if existing:
                 # Update existing employer record
@@ -7480,6 +7488,8 @@ async def create_bulk_attendance(
                             "amount": employer_entry.additional_charges,
                             "description": employer_entry.charge_description or ""
                         }] if employer_entry.additional_charges > 0 else [],
+                        "extra_payment_per_worker": float(employer_entry.extra_payment_per_worker or 0.0),  # ✅ Save extra per-worker bonus
+                        "extra_payment_reason": employer_entry.extra_payment_reason or "",  # ✅ Save reason
                         "remarks": employer_entry.remarks or "",  # ✅ Save remarks
                         "updated_at": datetime.now(timezone.utc).isoformat()
                     }}
@@ -7503,6 +7513,8 @@ async def create_bulk_attendance(
                         "amount": employer_entry.additional_charges,
                         "description": employer_entry.charge_description or ""
                     }] if employer_entry.additional_charges > 0 else [],
+                    extra_payment_per_worker=float(employer_entry.extra_payment_per_worker or 0.0),  # ✅ Save extra per-worker bonus
+                    extra_payment_reason=employer_entry.extra_payment_reason or None,  # ✅ Save reason
                     remarks=employer_entry.remarks or "",  # ✅ Save remarks
                     mode="employer",
                     created_by=current_user.id
@@ -7539,12 +7551,20 @@ async def create_bulk_attendance(
                     base_wage = float(worker.get("wage_per_day", 0))
                     if employer_entry.payment_per_worker and employer_entry.payment_per_worker > 0:
                         # Use payment_per_worker when provided
-                        payment_from_employer = float(employer_entry.payment_per_worker)
+                        base_payment_from_employer = float(employer_entry.payment_per_worker)
                     else:
                         # Fall back to individual worker's rate from employer (wage_from_employer)
-                        payment_from_employer = float(worker.get("wage_from_employer", 500.0))
-                    wage_amount = base_wage
-                    commission_amount = max(payment_from_employer - base_wage, 0.0)
+                        base_payment_from_employer = float(worker.get("wage_from_employer", 500.0))
+
+                    # ✅ Extra per-worker bonus (e.g. skill premium): paid by employer AND received by worker
+                    extra = float(employer_entry.extra_payment_per_worker or 0.0)
+                    payment_from_employer = base_payment_from_employer + extra
+                    wage_to_worker = base_wage + extra
+
+                    # Worker actually receives wage_per_day + extra (added to settlement)
+                    wage_amount = wage_to_worker
+                    # Commission = (employer payment + extra) - (worker wage + extra) = base diff (extra is pass-through)
+                    commission_amount = max(payment_from_employer - wage_to_worker, 0.0)
                     
                     # If worker already marked present but employer_id is empty, update it
                     if existing_worker_att:
@@ -7576,9 +7596,11 @@ async def create_bulk_attendance(
                                 {"_id": existing_commission['_id']},
                                 {"$set": {
                                     "employer_id": employer_entry.employer_id,
-                                    "payment_from_employer": payment_from_employer,  # ✅ Use individual rate
-                                    "wage_to_worker": base_wage,
-                                    "commission_amount": commission_amount
+                                    "payment_from_employer": payment_from_employer,  # ✅ Includes extra_payment_per_worker
+                                    "wage_to_worker": wage_to_worker,  # ✅ Includes extra_payment_per_worker
+                                    "commission_amount": commission_amount,
+                                    "extra_payment_per_worker": extra,
+                                    "extra_payment_reason": employer_entry.extra_payment_reason or None
                                 }}
                             )
                         else:
@@ -7587,9 +7609,11 @@ async def create_bulk_attendance(
                                 "date": date,
                                 "employer_id": employer_entry.employer_id,
                                 "worker_id": worker_id,
-                                "payment_from_employer": payment_from_employer,  # ✅ Use wage_from_employer or payment_per_worker
-                                "wage_to_worker": base_wage,  # ✅ Worker's wage_per_day from profile
+                                "payment_from_employer": payment_from_employer,  # ✅ base + extra
+                                "wage_to_worker": wage_to_worker,  # ✅ base + extra
                                 "commission_amount": commission_amount,
+                                "extra_payment_per_worker": extra,
+                                "extra_payment_reason": employer_entry.extra_payment_reason or None,
                                 "attendance_id": employer_attendance_id if employer_attendance_id else str(uuid.uuid4()),
                                 "created_at": datetime.now(timezone.utc).isoformat(),
                             }
@@ -7626,13 +7650,42 @@ async def create_bulk_attendance(
                         "date": date,
                         "employer_id": employer_entry.employer_id,
                         "worker_id": worker_id,
-                        "payment_from_employer": payment_from_employer,  # ✅ Use wage_from_employer or payment_per_worker
-                        "wage_to_worker": base_wage,  # ✅ Worker's wage_per_day from profile
+                        "payment_from_employer": payment_from_employer,  # ✅ base + extra
+                        "wage_to_worker": wage_to_worker,  # ✅ base + extra
                         "commission_amount": commission_amount,
+                        "extra_payment_per_worker": extra,
+                        "extra_payment_reason": employer_entry.extra_payment_reason or None,
                         "attendance_id": employer_attendance_id if employer_attendance_id else str(uuid.uuid4()),
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
                     await db.commissions.insert_one(commission_doc)
+
+                # ✅ ADDITIONAL CHARGES → recorded as commission (separate from per-worker commission rows)
+                # additional_charges (e.g., transport, food, lump-sum extras) is retained by the contractor
+                # and now reported as commission instead of being silently dropped.
+                if employer_entry.additional_charges and employer_entry.additional_charges > 0:
+                    existing_addl = await db.commissions.find_one({
+                        "contractor_id": current_user.id,
+                        "employer_id": employer_entry.employer_id,
+                        "date": date,
+                        "worker_id": "ADDITIONAL_CHARGES"
+                    })
+                    addl_doc = {
+                        "contractor_id": current_user.id,
+                        "date": date,
+                        "employer_id": employer_entry.employer_id,
+                        "worker_id": "ADDITIONAL_CHARGES",  # marker — not a real worker
+                        "payment_from_employer": float(employer_entry.additional_charges),
+                        "wage_to_worker": 0.0,
+                        "commission_amount": float(employer_entry.additional_charges),
+                        "charge_description": employer_entry.charge_description or "",
+                        "attendance_id": employer_attendance_id if employer_attendance_id else str(uuid.uuid4()),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if existing_addl:
+                        await db.commissions.update_one({"_id": existing_addl["_id"]}, {"$set": addl_doc})
+                    else:
+                        await db.commissions.insert_one(addl_doc)
             else:
                 # ✅ When workers are NOT selected, calculate commissions using default wage from preferences
                 # Get contractor preferences to get default_worker_wage
@@ -7644,20 +7697,25 @@ async def create_bulk_attendance(
                     # If no preference exists, use default value
                     default_wage = 450.0
                 
-                # Determine payment_from_employer
+                # Determine base payment_from_employer (per worker)
                 if employer_entry.payment_per_worker and employer_entry.payment_per_worker > 0:
-                    payment_from_employer = float(employer_entry.payment_per_worker)
+                    base_payment_from_employer = float(employer_entry.payment_per_worker)
                 else:
                     # Use default employer rate from preferences
                     if preference:
-                        payment_from_employer = float(preference.get("default_employer_rate", 500.0))
+                        base_payment_from_employer = float(preference.get("default_employer_rate", 500.0))
                     else:
-                        payment_from_employer = 500.0
-                
-                # Calculate commission per worker: payment_from_employer - default_wage
-                commission_per_worker = max(payment_from_employer - default_wage, 0.0)
+                        base_payment_from_employer = 500.0
+
+                # ✅ Extra per-worker bonus is paid by employer AND received by worker → pass-through, no commission impact
+                extra = float(employer_entry.extra_payment_per_worker or 0.0)
+                payment_from_employer = base_payment_from_employer + extra
+                wage_to_worker = default_wage + extra
+
+                # Calculate commission per worker: payment_from_employer - wage_to_worker (extra cancels out)
+                commission_per_worker = max(payment_from_employer - wage_to_worker, 0.0)
                 total_commission = commission_per_worker * employer_entry.workers_count
-                
+
                 # Create summary commission record (using special marker "SUMMARY" for worker_id)
                 # Check if summary commission already exists for this employer/date
                 existing_summary_commission = await db.commissions.find_one({
@@ -7673,14 +7731,41 @@ async def create_bulk_attendance(
                         "date": date,
                         "employer_id": employer_entry.employer_id,
                         "worker_id": "SUMMARY",  # Special marker for summary record when workers not selected
-                        "payment_from_employer": payment_from_employer,
-                        "wage_to_worker": default_wage,  # Standard/default wage used for all workers
-                        "commission_amount": total_commission,  # Total commission = (payment - default_wage) × workers_count
+                        "payment_from_employer": payment_from_employer,  # ✅ base + extra
+                        "wage_to_worker": wage_to_worker,  # ✅ base + extra
+                        "commission_amount": total_commission,  # Total commission = (payment - wage) × workers_count
+                        "extra_payment_per_worker": extra,
+                        "extra_payment_reason": employer_entry.extra_payment_reason or None,
                         "attendance_id": employer_attendance_id if employer_attendance_id else str(uuid.uuid4()),
                         "workers_count": employer_entry.workers_count,  # Store actual number of workers
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
                     await db.commissions.insert_one(commission_doc)
+
+                # ✅ ADDITIONAL CHARGES → recorded as commission (separate from per-worker / SUMMARY rows)
+                if employer_entry.additional_charges and employer_entry.additional_charges > 0:
+                    existing_addl = await db.commissions.find_one({
+                        "contractor_id": current_user.id,
+                        "employer_id": employer_entry.employer_id,
+                        "date": date,
+                        "worker_id": "ADDITIONAL_CHARGES"
+                    })
+                    addl_doc = {
+                        "contractor_id": current_user.id,
+                        "date": date,
+                        "employer_id": employer_entry.employer_id,
+                        "worker_id": "ADDITIONAL_CHARGES",
+                        "payment_from_employer": float(employer_entry.additional_charges),
+                        "wage_to_worker": 0.0,
+                        "commission_amount": float(employer_entry.additional_charges),
+                        "charge_description": employer_entry.charge_description or "",
+                        "attendance_id": employer_attendance_id if employer_attendance_id else str(uuid.uuid4()),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if existing_addl:
+                        await db.commissions.update_one({"_id": existing_addl["_id"]}, {"$set": addl_doc})
+                    else:
+                        await db.commissions.insert_one(addl_doc)
 
             results["employer_entries"].append(employer_entry.model_dump())
 
