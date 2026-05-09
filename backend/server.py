@@ -8197,15 +8197,16 @@ async def delete_attendance(
             if deleted_from_new.deleted_count == 0:
                 # If not in new collection, delete from old
                 await db.attendance.delete_one({"id": worker_record['id']})
-            
-            # Delete related commission records
-            await db.commissions.delete_many({
-                "contractor_id": current_user.id,
-                "worker_id": worker_id,
-                "employer_id": employer_id,
-                "date": date
-            })
-        
+
+        # ✅ Delete ALL commission rows for this contractor/employer/date.
+        # Catches per-worker rows, SUMMARY rows (when no specific workers were selected),
+        # and ADDITIONAL_CHARGES rows (when the toggle was on).
+        commissions_deleted = await db.commissions.delete_many({
+            "contractor_id": current_user.id,
+            "employer_id": employer_id,
+            "date": date
+        })
+
         # Delete the employer attendance record from appropriate collection
         deleted = await db.employer_attendance.delete_one({"id": attendance_id})
         if deleted.deleted_count == 0:
@@ -8215,7 +8216,8 @@ async def delete_attendance(
         return {
             "message": "Employer attendance deleted successfully",
             "deleted_worker_records": len(all_worker_records),
-            "workers_now_unassigned": len(all_worker_records)
+            "workers_now_unassigned": len(all_worker_records),
+            "commissions_deleted": commissions_deleted.deleted_count
         }
         
     # Handle WORKER attendance deletion
