@@ -263,7 +263,11 @@ function DetailedTable({ records }) {
     { key: 'iso_date', label: 'Date', render: (r) => r.date },
     { key: 'day_of_week', label: 'Day', render: (r) => r.day_of_week?.slice(0, 3) },
     { key: 'worker_name', label: 'Worker', render: (r) => r.worker_name },
-    { key: 'employer_name', label: 'Employer', render: (r) => r.employer_name || '—' },
+    { key: 'employer_name', label: 'Employer', render: (r) => {
+        const eid = (r.employer_id || '').toUpperCase();
+        if (eid === 'SELF') return <span className="text-amber-700">🏠 Own Work</span>;
+        return r.employer_name || '—';
+    } },
     {
       key: 'status', label: 'Status',
       render: (r) => (

@@ -398,7 +398,8 @@ export default function Attendance() {
       return;
     }
 
-    if ((!employerForm.selected_workers || employerForm.selected_workers.length === 0) && 
+    if (employerForm.employer_id !== 'SELF' &&
+        (!employerForm.selected_workers || employerForm.selected_workers.length === 0) && 
         (!employerForm.payment_per_worker || parseFloat(employerForm.payment_per_worker) <= 0)) {
       toast.error('Please enter Payment Per Worker amount');
       return;
@@ -1374,7 +1375,8 @@ export default function Attendance() {
                       <h3 className="text-base font-semibold text-gray-800">Payment Details</h3>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {(!employerForm.selected_workers || employerForm.selected_workers.length === 0) && (
+                      {/* Payment Per Worker — only when there's a real employer to collect from */}
+                      {employerForm.employer_id !== 'SELF' && (!employerForm.selected_workers || employerForm.selected_workers.length === 0) && (
                         <div>
                           <Label className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1">
                             Payment Per Worker (₹) <span className="text-red-500">*</span>
@@ -1388,6 +1390,24 @@ export default function Attendance() {
                             className="h-11 border-gray-300 focus:border-[#3B2ED0] focus:ring-[#3B2ED0]"
                           />
                           <p className="text-xs text-gray-500 mt-1.5">Amount employer will pay per worker (Default: ₹{preferences.default_employer_rate || 500})</p>
+                        </div>
+                      )}
+
+                      {/* Wage to Workers — only shown for SELF / Own Work when no specific worker is selected */}
+                      {employerForm.employer_id === 'SELF' && (!employerForm.selected_workers || employerForm.selected_workers.length === 0) && (
+                        <div>
+                          <Label className="text-sm font-semibold text-gray-700 mb-2">
+                            Wage per Worker (₹)
+                          </Label>
+                          <Input
+                            type="number"
+                            value={preferences.default_worker_wage || 450}
+                            readOnly
+                            className="h-11 border-gray-300 bg-gray-50 text-gray-700"
+                          />
+                          <p className="text-xs text-gray-500 mt-1.5">
+                            Default worker wage used for Own Work · ₹{preferences.default_worker_wage || 450}
+                          </p>
                         </div>
                       )}
 
@@ -1495,40 +1515,76 @@ export default function Attendance() {
                       <div className="h-8 w-8 bg-[#3B2ED0] rounded-lg flex items-center justify-center">
                         <IndianRupee className="h-5 w-5 text-white" />
                       </div>
-                      <h3 className="text-base font-bold text-gray-900">Payment Summary</h3>
+                      <h3 className="text-base font-bold text-gray-900">{employerForm.employer_id === 'SELF' ? 'Own Work Summary' : 'Payment Summary'}</h3>
                     </div>
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between bg-white rounded-lg p-3 border border-[#3B2ED0]/30">
-                        <span className="text-sm font-semibold text-gray-700">Total Amount to Collect</span>
-                        <span className="text-3xl font-bold text-[#3B2ED0]">₹{calculateTotalAmount().toLocaleString()}</span>
-                      </div>
-                      {employerForm.selected_workers && employerForm.selected_workers.length > 0 && parseFloat(employerForm.extra_payment_per_worker || 0) > 0 && (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <span className="text-xs font-medium text-blue-900">Extra Payment to Workers</span>
-                              {employerForm.extra_payment_reason && (
-                                <p className="text-xs text-blue-700 italic mt-0.5">({employerForm.extra_payment_reason})</p>
-                              )}
-                            </div>
-                            <div className="text-right">
-                              <span className="text-sm font-bold text-blue-600">
-                                ₹{parseFloat(employerForm.extra_payment_per_worker || 0).toLocaleString()}/worker
-                              </span>
-                              <p className="text-xs text-blue-700">
-                                Total: ₹{(parseFloat(employerForm.extra_payment_per_worker || 0) * employerForm.selected_workers.length).toLocaleString()}
-                              </p>
-                            </div>
+                      {employerForm.employer_id === 'SELF' ? (
+                        <>
+                          {/* ✅ SELF / Own Work: show wage paid to workers, no employer payment, no commission */}
+                          {(() => {
+                            const extra = parseFloat(employerForm.extra_payment_per_worker || 0);
+                            const count = parseInt(employerForm.workers_count || 0);
+                            let workerWageTotal = 0;
+                            let detail = '';
+                            if (employerForm.selected_workers && employerForm.selected_workers.length > 0) {
+                              const sel = workers.filter(w => employerForm.selected_workers.includes(w.id));
+                              const wages = sel.reduce((s, w) => s + (w.wage_per_day || 0) + extra, 0);
+                              workerWageTotal = wages;
+                              detail = `${sel.length} worker${sel.length > 1 ? 's' : ''} × their own wage${extra > 0 ? ` + ₹${extra} bonus` : ''}`;
+                            } else if (count > 0) {
+                              const defWage = preferences?.default_worker_wage || 450;
+                              workerWageTotal = (defWage + extra) * count;
+                              detail = `${count} worker${count > 1 ? 's' : ''} × ₹${defWage} default wage${extra > 0 ? ` + ₹${extra} bonus` : ''}`;
+                            }
+                            return (
+                              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-sm font-semibold text-amber-900">Wage to be paid to workers</span>
+                                  <span className="text-3xl font-bold text-amber-700">₹{workerWageTotal.toLocaleString()}</span>
+                                </div>
+                                <p className="text-xs text-amber-700">{detail}</p>
+                                <p className="text-xs text-amber-600 pt-1 border-t border-amber-200">
+                                  🏠 Own Work: no commission earned, no payment to collect from any employer.
+                                </p>
+                              </div>
+                            );
+                          })()}
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between bg-white rounded-lg p-3 border border-[#3B2ED0]/30">
+                            <span className="text-sm font-semibold text-gray-700">Total Amount to Collect</span>
+                            <span className="text-3xl font-bold text-[#3B2ED0]">₹{calculateTotalAmount().toLocaleString()}</span>
                           </div>
-                        </div>
-                      )}
-                      {calculateExpectedCommission() > 0 && (
-                        <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium text-green-900">Expected Commission</span>
-                            <span className="text-xl font-bold text-green-600">₹{calculateExpectedCommission().toLocaleString()}</span>
-                          </div>
-                        </div>
+                          {employerForm.selected_workers && employerForm.selected_workers.length > 0 && parseFloat(employerForm.extra_payment_per_worker || 0) > 0 && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <span className="text-xs font-medium text-blue-900">Extra Payment to Workers</span>
+                                  {employerForm.extra_payment_reason && (
+                                    <p className="text-xs text-blue-700 italic mt-0.5">({employerForm.extra_payment_reason})</p>
+                                  )}
+                                </div>
+                                <div className="text-right">
+                                  <span className="text-sm font-bold text-blue-600">
+                                    ₹{parseFloat(employerForm.extra_payment_per_worker || 0).toLocaleString()}/worker
+                                  </span>
+                                  <p className="text-xs text-blue-700">
+                                    Total: ₹{(parseFloat(employerForm.extra_payment_per_worker || 0) * employerForm.selected_workers.length).toLocaleString()}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {calculateExpectedCommission() > 0 && (
+                            <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-medium text-green-900">Expected Commission</span>
+                                <span className="text-xl font-bold text-green-600">₹{calculateExpectedCommission().toLocaleString()}</span>
+                              </div>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>

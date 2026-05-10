@@ -29,6 +29,7 @@ export default function Employers() {
   const [employerToDelete, setEmployerToDelete] = useState(null);
   const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
   const [employerToToggle, setEmployerToToggle] = useState(null);
+  const [employerStats, setEmployerStats] = useState({});
   const [formData, setFormData] = useState({
     name: '',
     phone_number: '',
@@ -40,7 +41,17 @@ export default function Employers() {
 
   useEffect(() => {
     fetchEmployers();
+    fetchEmployerStats();
   }, []);
+
+  const fetchEmployerStats = async () => {
+    try {
+      const r = await api.getEmployersStatsSummary();
+      const map = {};
+      (r?.data || []).forEach(s => { map[s.employer_id] = s; });
+      setEmployerStats(map);
+    } catch { setEmployerStats({}); }
+  };
 
   useEffect(() => {
     filterEmployersList();
@@ -527,7 +538,9 @@ export default function Employers() {
           </Card>
         ) : (
           <div className="grid gap-4">
-            {filteredEmployers.map((employer) => (
+            {filteredEmployers.map((employer) => {
+              const stats = employerStats[employer.id] || { days_engaged: 0, total_amount_billed: 0 };
+              return (
               <Card key={employer.id} className="border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
                 <CardContent className="p-5">
                   <div className="flex flex-col lg:flex-row gap-4">
@@ -576,6 +589,10 @@ export default function Employers() {
                                 ₹{employer.pending_payment.toLocaleString()} Pending
                               </Badge>
                             )}
+                          </div>
+                          {/* ✅ All-time stats */}
+                          <div className="mt-3 text-xs text-gray-600" data-testid={`employer-stats-${employer.id}`}>
+                            <span className="text-gray-400">All-time</span> · <strong className="text-gray-900">{stats.days_engaged}</strong> work days · <strong className="text-purple-700">₹{Math.round(stats.total_amount_billed).toLocaleString('en-IN')}</strong> billed
                           </div>
                         </div>
                       </div>
@@ -627,7 +644,8 @@ export default function Employers() {
                   </div>
                 </CardContent>
               </Card>
-            ))}
+            );
+            })}
           </div>
         )}
 

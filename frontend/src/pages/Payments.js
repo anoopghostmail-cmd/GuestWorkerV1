@@ -210,6 +210,17 @@ export default function Payments() {
         );
         // Sort employers by pending amount (highest first)
         setEmployerSummaries(sortByPendingAmount(response.data));
+        // Augment with all-time days_engaged + total_amount_billed
+        try {
+          const stats = await api.getEmployersStatsSummary();
+          const map = {};
+          (stats?.data || []).forEach(s => { map[s.employer_id] = s; });
+          setEmployerSummaries(prev => prev.map(e => ({
+            ...e,
+            days_engaged: map[e.employer_id]?.days_engaged ?? 0,
+            total_amount_billed_all_time: map[e.employer_id]?.total_amount_billed ?? 0,
+          })));
+        } catch {}
       } else if (activeTab === 'settle') {
         const response = await api.getWorkerSummaries(
           workerSearch, 
@@ -219,6 +230,18 @@ export default function Payments() {
         );
         // Sort workers by pending settlement (highest first)
         setWorkerSummaries(sortByPendingAmount(response.data));
+        // Augment with all-time days_worked + total_wage_earned
+        try {
+          const stats = await api.getWorkersStatsSummary();
+          const map = {};
+          (stats?.data || []).forEach(s => { map[s.worker_id] = s; });
+          setWorkerSummaries(prev => prev.map(w => ({
+            ...w,
+            days_worked: map[w.worker_id]?.days_worked ?? 0,
+            total_wage_earned_all_time: map[w.worker_id]?.total_wage_earned ?? 0,
+            self_days_worked: map[w.worker_id]?.self_days_worked ?? 0,
+          })));
+        } catch {}
       }
     } catch (error) {
       if (process.env.NODE_ENV === 'development') {
@@ -1022,6 +1045,12 @@ export default function Payments() {
                             </span>
                           </div>
                           <p className="text-sm text-gray-500">{employer.phone_number}</p>
+                          {/* ✅ All-time days worked */}
+                          {typeof employer.days_engaged === 'number' && (
+                            <p className="text-xs text-gray-600 mt-0.5">
+                              <strong>{employer.days_engaged}</strong> work days · <strong>₹{Math.round(employer.total_amount_billed_all_time || 0).toLocaleString('en-IN')}</strong> billed all-time
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center gap-6 text-sm">
                           <div className="text-right">
@@ -1154,6 +1183,15 @@ export default function Payments() {
                             </span>
                           </div>
                           <p className="text-sm text-gray-500">{worker.phone_number}</p>
+                          {/* ✅ All-time days worked */}
+                          {typeof worker.days_worked === 'number' && (
+                            <p className="text-xs text-gray-600 mt-0.5">
+                              <strong>{worker.days_worked}</strong> days · <strong>₹{Math.round(worker.total_wage_earned_all_time || 0).toLocaleString('en-IN')}</strong> earned all-time
+                              {worker.self_days_worked > 0 && (
+                                <span className="text-amber-700"> · 🏠 {worker.self_days_worked} own work</span>
+                              )}
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center gap-4 text-sm">
                           <div className="text-right">

@@ -33,6 +33,8 @@ export default function Workers() {
   const [workerToDelete, setWorkerToDelete] = useState(null);
   const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
   const [workerToToggle, setWorkerToToggle] = useState(null);
+  const [preferences, setPreferences] = useState({ default_worker_wage: 450, default_employer_rate: 500 });
+  const [workerStats, setWorkerStats] = useState({}); // {worker_id: {days_worked, total_wage_earned, self_*}}
   const [formData, setFormData] = useState({
     name: '',
     phone_number: '',
@@ -49,7 +51,31 @@ export default function Workers() {
   useEffect(() => {
     fetchWorkers();
     fetchRooms();
+    fetchPreferencesAndStats();
   }, []);
+
+  const fetchPreferencesAndStats = async () => {
+    try {
+      const p = await api.getPreferences();
+      if (p?.data) {
+        const dw = p.data.default_worker_wage ?? 450;
+        const de = p.data.default_employer_rate ?? 500;
+        setPreferences({ default_worker_wage: dw, default_employer_rate: de });
+        // Sync default values into form when no edit is in progress
+        setFormData(prev => (
+          (prev.wage_per_day === 450 && prev.wage_from_employer === 500)
+            ? { ...prev, wage_per_day: dw, wage_from_employer: de }
+            : prev
+        ));
+      }
+    } catch { /* keep defaults */ }
+    try {
+      const s = await api.getWorkersStatsSummary();
+      const map = {};
+      (s?.data || []).forEach(r => { map[r.worker_id] = r; });
+      setWorkerStats(map);
+    } catch { setWorkerStats({}); }
+  };
 
   const fetchRooms = async () => {
     try {
@@ -244,8 +270,8 @@ export default function Workers() {
       name: '',
       phone_number: '',
       address: '',
-      wage_per_day: 450,
-      wage_from_employer: 500,
+      wage_per_day: preferences.default_worker_wage ?? 450,
+      wage_from_employer: preferences.default_employer_rate ?? 500,
       date_of_joining: getTodayDDMMYYYY(),
       notes: '',
       room_id: '',
@@ -645,6 +671,7 @@ export default function Workers() {
           <div className="grid gap-4">
             {filteredWorkers.map((worker) => {
               const profitPerDay = (worker.wage_from_employer || 500) - worker.wage_per_day;
+              const stats = workerStats[worker.id] || { days_worked: 0, total_wage_earned: 0, self_days_worked: 0, self_wage_earned: 0 };
               return (
                 <Card key={worker.id} className="border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
                   <CardContent className="p-5">
@@ -700,6 +727,15 @@ export default function Workers() {
                                 <IndianRupee className="h-3 w-3 mr-1" />
                                 Profit: ₹{profitPerDay}/day
                               </Badge>
+                            </div>
+                            {/* ✅ All-time stats */}
+                            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600" data-testid={`worker-stats-${worker.id}`}>
+                              <span><span className="text-gray-400">All-time</span> · <strong className="text-gray-900">{stats.days_worked}</strong> days · <strong className="text-emerald-700">₹{Math.round(stats.total_wage_earned).toLocaleString('en-IN')}</strong> earned</span>
+                              {stats.self_days_worked > 0 && (
+                                <span className="text-amber-700">
+                                  🏠 Own Work: <strong>{stats.self_days_worked}</strong> d · ₹{Math.round(stats.self_wage_earned).toLocaleString('en-IN')}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>

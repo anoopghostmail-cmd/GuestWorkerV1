@@ -1998,6 +1998,66 @@ async def list_workers_without_room(current_user: User = Depends(get_active_subs
     }, {"_id": 0}).to_list(1000)
     return workers
 
+
+@api_router.get("/workers/stats-summary")
+async def get_workers_stats_summary(current_user: User = Depends(get_active_subscription_user)):
+    """Per-worker lifetime stats:
+       - days_worked: count of Present worker_attendance / attendance rows (incl. SELF days)
+       - total_wage_earned: sum of wage_amount on those rows
+       - self_days_worked: subset that were Own / Self work
+       - self_wage_earned: wages earned from Own / Self work
+       Used by the Workers list tiles, Payments page, and worker detail screens."""
+    pipeline_new = [
+        {"$match": {"contractor_id": current_user.id,
+                    "status": {"$in": ["Present", "Late"]}}},
+        {"$group": {
+            "_id": "$worker_id",
+            "days_worked": {"$sum": 1},
+            "total_wage_earned": {"$sum": {"$ifNull": ["$wage_earned", "$wage_amount"]}},
+            "self_days_worked": {"$sum": {"$cond": [{"$eq": [{"$toUpper": {"$ifNull": ["$employer_id", ""]}}, "SELF"]}, 1, 0]}},
+            "self_wage_earned": {"$sum": {"$cond": [{"$eq": [{"$toUpper": {"$ifNull": ["$employer_id", ""]}}, "SELF"]},
+                                                     {"$ifNull": ["$wage_earned", "$wage_amount"]}, 0]}},
+        }},
+    ]
+    pipeline_legacy = [
+        {"$match": {"contractor_id": current_user.id,
+                    "worker_id": {"$ne": None},
+                    "mode": {"$ne": "employer"}}},
+        {"$group": {
+            "_id": "$worker_id",
+            "days_worked": {"$sum": 1},
+            "total_wage_earned": {"$sum": {"$ifNull": ["$wage_amount", 0]}},
+            "self_days_worked": {"$sum": {"$cond": [{"$eq": [{"$toUpper": {"$ifNull": ["$employer_id", ""]}}, "SELF"]}, 1, 0]}},
+            "self_wage_earned": {"$sum": {"$cond": [{"$eq": [{"$toUpper": {"$ifNull": ["$employer_id", ""]}}, "SELF"]},
+                                                     {"$ifNull": ["$wage_amount", 0]}, 0]}},
+        }},
+    ]
+    combined = {}
+    for row in await db.worker_attendance.aggregate(pipeline_new).to_list(10000):
+        if not row.get("_id"):
+            continue
+        combined[row["_id"]] = {
+            "worker_id": row["_id"],
+            "days_worked": int(row.get("days_worked", 0)),
+            "total_wage_earned": float(row.get("total_wage_earned", 0) or 0),
+            "self_days_worked": int(row.get("self_days_worked", 0)),
+            "self_wage_earned": float(row.get("self_wage_earned", 0) or 0),
+        }
+    for row in await db.attendance.aggregate(pipeline_legacy).to_list(10000):
+        if not row.get("_id"):
+            continue
+        wid = row["_id"]
+        entry = combined.setdefault(wid, {
+            "worker_id": wid, "days_worked": 0, "total_wage_earned": 0.0,
+            "self_days_worked": 0, "self_wage_earned": 0.0,
+        })
+        entry["days_worked"] += int(row.get("days_worked", 0))
+        entry["total_wage_earned"] += float(row.get("total_wage_earned", 0) or 0)
+        entry["self_days_worked"] += int(row.get("self_days_worked", 0))
+        entry["self_wage_earned"] += float(row.get("self_wage_earned", 0) or 0)
+    return list(combined.values())
+
+
 @api_router.get("/workers/{worker_id}", response_model=Worker)
 async def get_worker(worker_id: str, current_user: User = Depends(get_active_subscription_user)):
     worker = await db.workers.find_one({"id": worker_id, "contractor_id": current_user.id}, {"_id": 0})
@@ -2323,6 +2383,56 @@ async def get_employers(
         if isinstance(employer['created_at'], str):
             employer['created_at'] = datetime.fromisoformat(employer['created_at'])
     return employers
+
+@api_router.get("/employers/stats-summary")
+async def get_employers_stats_summary(current_user: User = Depends(get_active_subscription_user)):
+    """Per-employer lifetime stats:
+       - days_engaged: distinct attendance dates billed to this employer (mode=employer)
+       - total_amount_billed: sum of wage_amount from employer-mode attendance rows
+       SELF / own-work entries are excluded (no real employer).
+       Also returns one synthetic row with employer_id='SELF' aggregating own-work usage:
+       {employer_id:'SELF', days_engaged, total_amount_billed}."""
+    real_pipeline = [
+        {"$match": {"contractor_id": current_user.id, "mode": "employer",
+                    "employer_id": {"$nin": [None, "", "SELF"]}}},
+        {"$group": {
+            "_id": {"employer_id": "$employer_id", "date": "$date"},
+            "amount": {"$first": {"$ifNull": ["$wage_amount", 0]}},
+        }},
+        {"$group": {
+            "_id": "$_id.employer_id",
+            "days_engaged": {"$sum": 1},
+            "total_amount_billed": {"$sum": "$amount"},
+        }},
+    ]
+    rows = await db.attendance.aggregate(real_pipeline).to_list(10000)
+    out = [{
+        "employer_id": r["_id"],
+        "days_engaged": int(r.get("days_engaged", 0)),
+        "total_amount_billed": float(r.get("total_amount_billed", 0) or 0),
+    } for r in rows if r.get("_id")]
+
+    # Synthetic SELF aggregate
+    self_pipeline = [
+        {"$match": {"contractor_id": current_user.id, "mode": "employer",
+                    "$expr": {"$eq": [{"$toUpper": {"$ifNull": ["$employer_id", ""]}}, "SELF"]}}},
+        {"$group": {
+            "_id": "$date",
+            "amount": {"$first": {"$ifNull": ["$wage_amount", 0]}},
+        }},
+        {"$group": {"_id": None,
+                    "days_engaged": {"$sum": 1},
+                    "total_amount_billed": {"$sum": "$amount"}}},
+    ]
+    self_rows = await db.attendance.aggregate(self_pipeline).to_list(1)
+    if self_rows:
+        out.append({
+            "employer_id": "SELF",
+            "days_engaged": int(self_rows[0].get("days_engaged", 0)),
+            "total_amount_billed": float(self_rows[0].get("total_amount_billed", 0) or 0),
+        })
+    return out
+
 
 @api_router.get("/employers/{employer_id}", response_model=Employer)
 async def get_employer(employer_id: str, current_user: User = Depends(get_active_subscription_user)):
@@ -14235,8 +14345,11 @@ async def _build_work_history(
             "worker_name": worker.get("name", "Unknown Worker"),
             "worker_phone": worker.get("phone_number", ""),
             "employer_id": r.get("employer_id") or "",
-            "employer_name": employer.get("name", "Unassigned") if employer else (
-                "" if not r.get("employer_id") else "Unassigned"),
+            "employer_name": (
+                "Own / Self Work" if (r.get("employer_id") or "").upper() == "SELF"
+                else (employer.get("name", "Unassigned") if employer else (
+                    "" if not r.get("employer_id") else "Unassigned"))
+            ),
             "status": status,
             "wage_earned": round(wage_earned, 2),
             "amount_from_employer": round(amount_from_employer, 2),
