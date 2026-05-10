@@ -878,6 +878,7 @@ class Worker(BaseModel):
     pending_settlement: float = 0.0
     charges: List[Dict[str, Any]] = []  # Worker charges (electricity, etc)
     wage_history: List[Dict[str, Any]] = []
+    room_id: Optional[str] = None  # ✅ Optional room assignment
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class WorkerCreate(BaseModel):
@@ -890,6 +891,7 @@ class WorkerCreate(BaseModel):
     notes: Optional[str] = Field(None, max_length=2000)
     initial_pending_settlement: Optional[float] = 0.0  # Initial pending wage when migrating to platform
     initial_advance_paid: Optional[float] = 0.0  # Initial advance paid when migrating to platform
+    room_id: Optional[str] = None  # ✅ Optional room assignment at creation time
 
 class WorkerUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
@@ -1917,12 +1919,30 @@ async def create_worker(
         date_of_joining=joining_date,
         notes=sanitize_input(worker_data.notes) if worker_data.notes else None,
         pending_settlement=worker_data.initial_pending_settlement or 0.0,  # Set initial pending wage
-        advance_paid=worker_data.initial_advance_paid or 0.0  # Set initial advance paid
+        advance_paid=worker_data.initial_advance_paid or 0.0,  # Set initial advance paid
+        room_id=worker_data.room_id or None  # ✅ Optional room assignment from form
     )
     
     worker_dict = worker.model_dump()
     worker_dict['date_of_joining'] = worker_dict['date_of_joining'].isoformat()
     worker_dict['created_at'] = worker_dict['created_at'].isoformat()
+
+    # ✅ If room_id is provided, validate it belongs to this contractor and isn't full.
+    if worker_data.room_id:
+        room = await db.rooms.find_one({"id": worker_data.room_id, "contractor_id": current_user.id})
+        if not room:
+            raise HTTPException(status_code=400, detail="Selected room not found")
+        if room.get("max_occupants"):
+            current_count = await db.workers.count_documents({
+                "contractor_id": current_user.id,
+                "room_id": worker_data.room_id,
+                "status": "Active",
+            })
+            if current_count >= int(room["max_occupants"]):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Room '{room.get('name', 'Selected')}' is at full capacity ({room['max_occupants']} occupants)."
+                )
     
     # SECURITY: Insert worker
     await db.workers.insert_one(worker_dict)
@@ -1964,6 +1984,18 @@ async def get_workers(
             worker['date_of_joining'] = datetime.fromisoformat(worker['date_of_joining'])
         if isinstance(worker['created_at'], str):
             worker['created_at'] = datetime.fromisoformat(worker['created_at'])
+    return workers
+
+@api_router.get("/workers/without-room")
+async def list_workers_without_room(current_user: User = Depends(get_active_subscription_user)):
+    """Active workers who are not yet assigned to any room — for the
+    Add-Member / Create-Room worker picker. Declared before /workers/{worker_id}
+    so FastAPI routes the literal path before the wildcard."""
+    workers = await db.workers.find({
+        "contractor_id": current_user.id,
+        "status": "Active",
+        "$or": [{"room_id": {"$exists": False}}, {"room_id": None}, {"room_id": ""}],
+    }, {"_id": 0}).to_list(1000)
     return workers
 
 @api_router.get("/workers/{worker_id}", response_model=Worker)
@@ -2020,6 +2052,31 @@ async def update_worker(
 
 @api_router.delete("/workers/{worker_id}")
 async def delete_worker(worker_id: str, current_user: User = Depends(get_active_subscription_user)):
+    # ✅ Block deletion if any attendance / commission / settlement / charge history exists.
+    # The user is offered the option to deactivate (set status=Inactive) instead.
+    worker = await db.workers.find_one({"id": worker_id, "contractor_id": current_user.id})
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+
+    attendance_exists = await db.attendance.find_one(
+        {"contractor_id": current_user.id,
+         "$or": [{"worker_id": worker_id}, {"selected_workers": worker_id}]}
+    ) or await db.worker_attendance.find_one({"contractor_id": current_user.id, "worker_id": worker_id})
+
+    commission_exists = await db.commissions.find_one({"contractor_id": current_user.id, "worker_id": worker_id})
+    settlement_exists = await db.wage_settlements.find_one({"contractor_id": current_user.id, "worker_id": worker_id}) if hasattr(db, "wage_settlements") else None
+    has_pending = float(worker.get("pending_settlement", 0) or 0) != 0 or float(worker.get("advance_paid", 0) or 0) != 0
+
+    if attendance_exists or commission_exists or settlement_exists or has_pending:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This worker has attendance, commission, settlement or pending balance history "
+                "and cannot be deleted. You can deactivate the worker instead — their records will "
+                "be preserved and they won't appear in active lists."
+            )
+        )
+
     result = await db.workers.delete_one({"id": worker_id, "contractor_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Worker not found")
@@ -2058,7 +2115,7 @@ class RoomBase(BaseModel):
     max_occupants: Optional[int] = None
 
 class RoomCreate(RoomBase):
-    pass
+    member_ids: List[str] = []  # ✅ Optional worker IDs to assign at creation
 
 class RoomUpdate(BaseModel):
     name: Optional[str] = None
@@ -2109,7 +2166,8 @@ async def get_room(room_id: str, current_user: User = Depends(get_active_subscri
 
 @api_router.post("/rooms")
 async def create_room(room_data: RoomCreate, current_user: User = Depends(get_active_subscription_user)):
-    """Create a new room"""
+    """Create a new room. Optionally assign initial members in the same call.
+    Workers already assigned to another room are silently skipped."""
     room_id = str(uuid.uuid4())
     room = {
         "id": room_id,
@@ -2121,11 +2179,30 @@ async def create_room(room_data: RoomCreate, current_user: User = Depends(get_ac
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
-    
+
     await db.rooms.insert_one(room)
-    
-    # Return the room without MongoDB's _id field
+
+    # ✅ Assign initial members (skip those already in any room)
+    if room_data.member_ids:
+        candidate_ids = [mid for mid in room_data.member_ids if mid]
+        if room_data.max_occupants:
+            candidate_ids = candidate_ids[: int(room_data.max_occupants)]
+        if candidate_ids:
+            await db.workers.update_many(
+                {
+                    "contractor_id": current_user.id,
+                    "id": {"$in": candidate_ids},
+                    "status": "Active",
+                    "$or": [{"room_id": {"$exists": False}}, {"room_id": None}, {"room_id": ""}],
+                },
+                {"$set": {"room_id": room_id}},
+            )
+
+    # Return the room with the live member count
     created_room = await db.rooms.find_one({"id": room_id}, {"_id": 0})
+    created_room["member_count"] = await db.workers.count_documents(
+        {"contractor_id": current_user.id, "room_id": room_id, "status": "Active"}
+    )
     return created_room
 
 @api_router.put("/rooms/{room_id}")
@@ -2293,6 +2370,25 @@ async def update_employer(employer_id: str, employer_data: EmployerUpdate, curre
 
 @api_router.delete("/employers/{employer_id}")
 async def delete_employer(employer_id: str, current_user: User = Depends(get_active_subscription_user)):
+    # ✅ Block deletion if any attendance / commission / payment history exists.
+    employer = await db.employers.find_one({"id": employer_id, "contractor_id": current_user.id})
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer not found")
+
+    attendance_exists = await db.attendance.find_one({"contractor_id": current_user.id, "employer_id": employer_id})
+    commission_exists = await db.commissions.find_one({"contractor_id": current_user.id, "employer_id": employer_id})
+    has_pending = float(employer.get("pending_payment", 0) or 0) != 0 or float(employer.get("advance_received", 0) or 0) != 0
+
+    if attendance_exists or commission_exists or has_pending:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This employer has attendance, commission or pending payment history and "
+                "cannot be deleted. You can deactivate the employer instead — their records will "
+                "be preserved and they won't appear in active lists."
+            )
+        )
+
     result = await db.employers.delete_one({"id": employer_id, "contractor_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Employer not found")
@@ -7426,6 +7522,10 @@ async def create_bulk_attendance(
                 # Prevent over-assignment and duplicate workers
             assigned_ids = await get_assigned_worker_ids(current_user.id, date)
 
+            # ✅ SELF (Own Work): when the contractor sends workers to his own jobs,
+            # there is no employer to bill and no commission to earn. Worker still gets wage.
+            is_self_work = (employer_entry.employer_id or "").upper() == "SELF"
+
             if employer_entry.selected_workers:
                 overlap = [wid for wid in employer_entry.selected_workers if wid in assigned_ids]
                 if overlap:
@@ -7523,7 +7623,7 @@ async def create_bulk_attendance(
                 await db.employers.update_one(
                     {"id": employer_entry.employer_id},
                     {"$inc": {"pending_payment": diff}}
-                )
+                ) if not is_self_work else None
             else:
                 # Create new employer record
                 entry = AttendanceEntry(
@@ -7555,7 +7655,7 @@ async def create_bulk_attendance(
                 await db.employers.update_one(
                     {"id": employer_entry.employer_id},
                     {"$inc": {"pending_payment": total_amount}}
-                )
+                ) if not is_self_work else None
 
             # === NEW === Commission + Worker Attendance Auto Marking ===
             # ✅ Use individual worker rates when available
@@ -7609,7 +7709,10 @@ async def create_bulk_attendance(
                             }}
                         )
                         
-                        # Insert/update commission record
+                        # Insert/update commission record (skip entirely for SELF / own-work)
+                        if is_self_work:
+                            results["warnings"].append(f"Assigned worker {worker_id} to own work")
+                            continue
                         existing_commission = await db.commissions.find_one({
                             "contractor_id": current_user.id,
                             "worker_id": worker_id,
@@ -7670,6 +7773,9 @@ async def create_bulk_attendance(
                     )
 
                     # ✅ Insert commission record - Calculate using worker's wage_from_employer or payment_per_worker
+                    if is_self_work:
+                        # SELF / own-work: no commission row
+                        continue
                     commission_doc = {
                         "contractor_id": current_user.id,
                         "date": date,
@@ -7688,7 +7794,8 @@ async def create_bulk_attendance(
                 # ✅ ADDITIONAL CHARGES → recorded as commission ONLY when the toggle is on
                 # When `additional_charges_as_commission` is True, additional_charges count toward
                 # contractor commission. When False (default), they only inflate the employer's bill.
-                if (employer_entry.additional_charges_as_commission
+                if (not is_self_work
+                        and employer_entry.additional_charges_as_commission
                         and employer_entry.additional_charges
                         and employer_entry.additional_charges > 0):
                     existing_addl = await db.commissions.find_one({
@@ -7719,6 +7826,10 @@ async def create_bulk_attendance(
                 # - wage_to_worker = default_worker_wage from preferences (only sensible value
                 #   when no specific worker is known)
                 # - commission per worker = payment_from_employer - default_worker_wage
+                if is_self_work:
+                    # SELF / own-work: no commission row when no specific worker
+                    results["employer_entries"].append(employer_entry.model_dump())
+                    continue
                 preference = await db.contractor_preferences.find_one({"contractor_id": current_user.id}, {"_id": 0})
                 if preference:
                     default_wage = float(preference.get("default_worker_wage", 450.0))
@@ -8125,22 +8236,27 @@ async def delete_attendance(
         employer_id = record['employer_id']
         date = record['date']
         total_amount = record.get('total_amount', record.get('wage_amount', 0))
-        
-        # ✅ SAFETY CHECK: Verify deletion won't cause negative balance
-        employer = await db.employers.find_one({"id": employer_id})
-        if not employer:
-            raise HTTPException(status_code=404, detail="Employer not found")
-        
-        current_pending = float(employer.get('pending_payment', 0))
-        new_pending = current_pending - total_amount
-        
-        if new_pending < -0.01:  # Allow small floating point errors
-            # Calculate how much has been paid
-            amount_paid = total_amount + abs(new_pending)
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Cannot delete this attendance record. ₹{amount_paid:.2f} has already been collected from this employer. Please reverse the payment first or contact support."
-            )
+
+        # ✅ SELF / own-work attendance: no employer to refund, no commission to delete (none exist).
+        is_self_work = (employer_id or "").upper() == "SELF"
+        if is_self_work:
+            employer = None
+        else:
+            # ✅ SAFETY CHECK: Verify deletion won't cause negative balance
+            employer = await db.employers.find_one({"id": employer_id})
+            if not employer:
+                raise HTTPException(status_code=404, detail="Employer not found")
+
+            current_pending = float(employer.get('pending_payment', 0))
+            new_pending = current_pending - total_amount
+
+            if new_pending < -0.01:  # Allow small floating point errors
+                # Calculate how much has been paid
+                amount_paid = total_amount + abs(new_pending)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot delete this attendance record. ₹{amount_paid:.2f} has already been collected from this employer. Please reverse the payment first or contact support."
+                )
         
         # Check all associated worker records for negative balance issues
         worker_records = await db.worker_attendance.find({
@@ -8176,11 +8292,12 @@ async def delete_attendance(
                         detail=f"Cannot delete this attendance. ₹{amount_settled:.2f} has already been settled with worker '{worker_name}'. Please reverse the settlement first."
                     )
         
-        # Reverse employer pending payment
-        await db.employers.update_one(
-            {"id": employer_id},
-            {"$inc": {"pending_payment": -total_amount}}
-        )
+        # Reverse employer pending payment (skip for SELF/own-work)
+        if not is_self_work:
+            await db.employers.update_one(
+                {"id": employer_id},
+                {"$inc": {"pending_payment": -total_amount}}
+            )
         
         # FIX: Delete ALL worker attendance records that have this employer_id for this date
         # This includes workers in selected_workers list AND any others assigned to this employer

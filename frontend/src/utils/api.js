@@ -24,6 +24,7 @@ export const api = {
 
   // ------------------ Workers ------------------
   getWorkers: () => axiosInstance.get(`/workers`),
+  getWorkersWithoutRoom: () => axiosInstance.get(`/workers/without-room`),
   getWorker: (id) => axiosInstance.get(`/workers/${id}`),
   createWorker: (data) => axiosInstance.post(`/workers`, data),
   updateWorker: (id, data) => axiosInstance.put(`/workers/${id}`, data),

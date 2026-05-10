@@ -197,7 +197,25 @@ export default function Workers() {
       setDeleteConfirmOpen(false);
       setWorkerToDelete(null);
     } catch (error) {
-      toast.error('Failed to delete worker');
+      const detail = error?.response?.data?.detail || 'Failed to delete worker';
+      // Backend blocks delete when attendance / commission / settlement / pending exists.
+      // Offer the user to deactivate instead.
+      if (error?.response?.status === 400 && /cannot be deleted/i.test(detail)) {
+        const ok = window.confirm(detail + '\n\nDeactivate this worker now? (Their records will be kept.)');
+        if (ok) {
+          try {
+            await api.updateWorker(workerToDelete.id, { status: 'Inactive' });
+            toast.success('Worker deactivated');
+            fetchWorkers(true);
+          } catch (e) {
+            toast.error(e?.response?.data?.detail || 'Failed to deactivate worker');
+          }
+        }
+      } else {
+        toast.error(detail);
+      }
+      setDeleteConfirmOpen(false);
+      setWorkerToDelete(null);
     }
   };
 

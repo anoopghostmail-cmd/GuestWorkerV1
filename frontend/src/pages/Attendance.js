@@ -302,12 +302,25 @@ export default function Attendance() {
   };
 
   const getUnallocatedWorkers = () => {
+    // Build a set of worker IDs to exclude due to: (a) already allocated to an
+    // employer that day, OR (b) marked Absent in worker-mode (saved or in-memory).
+    const absentIds = new Set();
+    savedWorkerRecords.forEach(r => {
+      if (r && r.status === 'Absent' && r.worker_id) absentIds.add(String(r.worker_id));
+    });
+    Object.entries(workerAttendance || {}).forEach(([wid, state]) => {
+      if (state && state.status === 'Absent') absentIds.add(String(wid));
+    });
+
     const result = workers.filter(w => {
-      if (editingRecord && editingRecord.selected_workers && 
+      // When editing an existing record, keep its currently-selected workers visible
+      if (editingRecord && editingRecord.selected_workers &&
           editingRecord.selected_workers.includes(w.id)) {
         return true;
       }
-      return !allocatedWorkerIds.has(String(w.id));
+      if (allocatedWorkerIds.has(String(w.id))) return false;
+      if (absentIds.has(String(w.id))) return false;
+      return true;
     });
     return result.sort((a, b) => a.name.localeCompare(b.name));
   };
@@ -1224,12 +1237,16 @@ export default function Attendance() {
                           <SelectValue placeholder="Choose an employer..." />
                         </SelectTrigger>
                         <SelectContent>
+                          {/* ✅ Own / Self Work option — for contractor's own jobs (no commission) */}
+                          <SelectItem key="SELF" value="SELF" data-testid="employer-select-self">
+                            🏠 Own / Self Work (no commission)
+                          </SelectItem>
                           {getAvailableEmployers().map(emp => (
                             <SelectItem key={emp.id} value={emp.id}>{emp.name}</SelectItem>
                           ))}
                           {getAvailableEmployers().length === 0 && (
                             <div className="p-3 text-sm text-gray-500 text-center">
-                              All employers already recorded for this date
+                              No external employers available — use Own / Self Work above.
                             </div>
                           )}
                         </SelectContent>

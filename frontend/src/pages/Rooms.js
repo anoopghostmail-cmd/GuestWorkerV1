@@ -55,6 +55,7 @@ export default function Rooms() {
     name: '',
     key_number: '',
     max_occupants: '',
+    member_ids: [],
   });
   const [addWorkerId, setAddWorkerId] = useState('');
 
@@ -80,7 +81,7 @@ export default function Rooms() {
 
   const openCreateDialog = () => {
     setEditingRoom(null);
-    setFormData({ name: '', key_number: '', max_occupants: '' });
+    setFormData({ name: '', key_number: '', max_occupants: '', member_ids: [] });
     setDialogOpen(true);
   };
 
@@ -91,6 +92,7 @@ export default function Rooms() {
       name: room.name || '',
       key_number: room.key_number || '',
       max_occupants: room.max_occupants ? String(room.max_occupants) : '',
+      member_ids: [],
     });
     setDialogOpen(true);
   };
@@ -111,6 +113,8 @@ export default function Rooms() {
         await api.updateRoom(editingRoom.id, payload);
         toast.success('Room updated successfully');
       } else {
+        // Include initial members on create
+        payload.member_ids = (formData.member_ids || []).filter(Boolean);
         await api.createRoom(payload);
         toast.success('Room created successfully');
       }
@@ -175,8 +179,14 @@ export default function Rooms() {
 
   const maxOcc = roomForMembers?.max_occupants;
   const atMax = typeof maxOcc === 'number' && maxOcc > 0 && roomMembers.length >= maxOcc;
+  // ✅ Only workers without ANY room assignment can be added.
+  // Workers already assigned to another room are excluded entirely.
   const availableToAdd = workers.filter(
-    (w) => w.status === 'Active' && w.room_id !== roomForMembers?.id
+    (w) => w.status === 'Active' && (!w.room_id || w.room_id === '')
+  );
+  // For create-room modal: same filter (workers free of any room).
+  const unassignedWorkers = workers.filter(
+    (w) => w.status === 'Active' && (!w.room_id || w.room_id === '')
   );
 
   const filteredRooms = rooms.filter((r) => {
@@ -499,6 +509,56 @@ export default function Rooms() {
                   </div>
                   <p className="text-xs text-gray-500">Leave empty or choose &quot;No limit&quot; for unlimited capacity</p>
                 </div>
+
+                {/* ✅ Worker quick-select (create only) */}
+                {!editingRoom && (
+                  <div className="space-y-2 pt-2 border-t border-gray-100">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-gray-900">Add workers to this room</label>
+                      <span className="text-xs text-gray-500">
+                        {(formData.member_ids || []).length} selected
+                        {formData.max_occupants ? ` / ${formData.max_occupants}` : ''}
+                      </span>
+                    </div>
+                    {unassignedWorkers.length === 0 ? (
+                      <p className="text-xs text-gray-500 italic">No unassigned workers available. (Workers already in another room are hidden.)</p>
+                    ) : (
+                      <div className="max-h-44 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                        {unassignedWorkers.map((w) => {
+                          const checked = (formData.member_ids || []).includes(w.id);
+                          const limit = formData.max_occupants ? parseInt(formData.max_occupants, 10) : null;
+                          const disabledByLimit = !checked && limit && (formData.member_ids || []).length >= limit;
+                          return (
+                            <label
+                              key={w.id}
+                              data-testid={`room-create-member-${w.id}`}
+                              className={`flex items-center gap-3 px-3 py-2 ${disabledByLimit ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-teal-50/50'}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={disabledByLimit}
+                                onChange={(e) => {
+                                  const ids = new Set(formData.member_ids || []);
+                                  if (e.target.checked) ids.add(w.id); else ids.delete(w.id);
+                                  setFormData({ ...formData, member_ids: Array.from(ids) });
+                                }}
+                                className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm text-gray-900 truncate">{w.name}</div>
+                                {w.phone_number && (
+                                  <div className="text-xs text-gray-500 truncate">{w.phone_number}</div>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <p className="text-xs text-gray-500">Workers shown here are not yet in any room. You can also add more later.</p>
+                  </div>
+                )}
               </div>
 
               {/* Footer */}

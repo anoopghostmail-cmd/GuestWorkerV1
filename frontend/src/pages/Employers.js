@@ -171,7 +171,23 @@ export default function Employers() {
       setDeleteConfirmOpen(false);
       setEmployerToDelete(null);
     } catch (error) {
-      toast.error('Failed to delete employer');
+      const detail = error?.response?.data?.detail || 'Failed to delete employer';
+      if (error?.response?.status === 400 && /cannot be deleted/i.test(detail)) {
+        const ok = window.confirm(detail + '\n\nDeactivate this employer now? (Their records will be kept.)');
+        if (ok) {
+          try {
+            await api.updateEmployer(employerToDelete.id, { status: 'Inactive' });
+            toast.success('Employer deactivated');
+            fetchEmployers();
+          } catch (e) {
+            toast.error(e?.response?.data?.detail || 'Failed to deactivate employer');
+          }
+        }
+      } else {
+        toast.error(detail);
+      }
+      setDeleteConfirmOpen(false);
+      setEmployerToDelete(null);
     }
   };
 
