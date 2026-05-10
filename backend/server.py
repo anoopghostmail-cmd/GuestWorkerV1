@@ -3782,7 +3782,37 @@ async def get_employer_payment_summaries(
             "status": status,
             "phone_number": employer.get('phone_number', '')
         })
-    
+
+    # ✅ Synthesize an "Own / Self Work" row so SELF attendance is visible in the
+    # employer payments / work-history view. No pending or collection (the contractor
+    # is the employer). Total work amount reflects how much was paid out for own jobs.
+    self_attendance = await db.attendance.find({
+        "contractor_id": current_user.id,
+        "mode": "employer",
+        "$expr": {"$eq": [{"$toUpper": {"$ifNull": ["$employer_id", ""]}}, "SELF"]},
+    }, {"_id": 0}).to_list(10000)
+    if start_date and end_date:
+        try:
+            _s = datetime.strptime(start_date, "%d-%m-%Y")
+            _e = datetime.strptime(end_date, "%d-%m-%Y")
+            self_attendance = [a for a in self_attendance
+                               if _s <= datetime.strptime(a["date"], "%d-%m-%Y") <= _e]
+        except Exception:
+            pass
+    if self_attendance:
+        self_work_total = sum(float(a.get("total_amount") or a.get("wage_amount") or 0) for a in self_attendance)
+        summaries.append({
+            "employer_id": "SELF",
+            "employer_name": "🏠 Own / Self Work",
+            "total_pending": 0,
+            "total_collected": 0,
+            "total_work_amount": self_work_total,
+            "advance_received": 0,
+            "status": "Own Work",
+            "phone_number": "",
+            "is_self_work": True,
+        })
+
     # Filter by status
     if filter_status and filter_status != "all":
         summaries = [s for s in summaries if s['status'].lower() == filter_status.lower()]
@@ -3839,7 +3869,12 @@ async def get_employer_payment_history(
             pass
     
     # Get employer initial pending
-    employer = await db.employers.find_one({"id": employer_id}, {"_id": 0})
+    if (employer_id or "").upper() == "SELF":
+        employer = {"name": "🏠 Own / Self Work", "pending_payment": 0, "advance_received": 0}
+    else:
+        employer = await db.employers.find_one({"id": employer_id}, {"_id": 0})
+        if not employer:
+            raise HTTPException(status_code=404, detail="Employer not found")
     
     # Calculate running balance
     history = []
@@ -4519,11 +4554,15 @@ async def get_employer_work_history(
             all_attendances = filtered_attendances
         
         employer = await db.employers.find_one({"id": employer_id}, {"_id": 0})
-        
+        # ✅ Handle synthetic SELF / Own Work employer
+        is_self = (employer_id or "").upper() == "SELF"
+        if is_self and not employer:
+            employer = {"name": "🏠 Own / Self Work", "company": ""}
+
         if not all_attendances:
             print(f"⚠️ No attendance records found")
             return {
-                "employer_name": employer['name'] if employer else "Unknown",
+                "employer_name": employer['name'] if employer else ("🏠 Own / Self Work" if is_self else "Unknown"),
                 "employer_company": employer.get('company', '') if employer else '',
                 "history": [],
                 "total_amount": 0,
@@ -4579,7 +4618,7 @@ async def get_employer_work_history(
         print(f"✅ Returning {len(history)} records")
         
         return {
-            "employer_name": employer['name'] if employer else "Unknown",
+            "employer_name": employer['name'] if employer else ("🏠 Own / Self Work" if is_self else "Unknown"),
             "employer_company": employer.get('company', '') if employer else '',
             "history": history,
             "total_amount": cumulative,
@@ -4806,9 +4845,12 @@ async def get_worker_work_history(
             # Get employer name if assigned
             employer_name = None
             if att.get('employer_id'):
-                employer = await db.employers.find_one({"id": att['employer_id']}, {"_id": 0, "name": 1})
-                if employer:
-                    employer_name = employer['name']
+                if str(att['employer_id']).upper() == 'SELF':
+                    employer_name = "🏠 Own / Self Work"
+                else:
+                    employer = await db.employers.find_one({"id": att['employer_id']}, {"_id": 0, "name": 1})
+                    if employer:
+                        employer_name = employer['name']
             
             history.append({
                 "id": att.get('id'),

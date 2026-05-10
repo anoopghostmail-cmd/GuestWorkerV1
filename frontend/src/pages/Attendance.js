@@ -828,8 +828,10 @@ export default function Attendance() {
   };
 
   const getEmployerName = (employerId) => {
+    if (!employerId) return '—';
+    if (String(employerId).toUpperCase() === 'SELF') return '🏠 Own / Self Work';
     const employer = employers.find(e => e.id === employerId);
-    return employer?.name || 'Unknown';
+    return employer?.name || '—';
   };
 
   const getWorkerName = (workerId) => {
@@ -1637,7 +1639,10 @@ export default function Attendance() {
                       return (empA?.name || '').localeCompare(empB?.name || '');
                     })
                     .map((record) => {
-                      const employer = employers.find(e => e.id === record.employer_id);
+                      const isSelfWork = (record.employer_id || '').toUpperCase() === 'SELF';
+                      const employer = isSelfWork
+                        ? { id: 'SELF', name: '🏠 Own / Self Work' }
+                        : employers.find(e => e.id === record.employer_id);
                       const selectedWorkersData = record.selected_workers?.map(wId => 
                         workers.find(w => w.id === wId)
                       ).filter(Boolean) || [];
@@ -1647,17 +1652,17 @@ export default function Attendance() {
                       const extraPaymentReason = record.extra_payment_reason || '';
                       
                       return (
-                        <Card key={record.id} className="border border-gray-200 shadow-sm hover:shadow-lg transition-all bg-white">
-                          <CardHeader className="bg-gradient-to-r from-[#3B2ED0]/10 to-[#F8FAFF] border-b border-gray-200 pb-3">
+                        <Card key={record.id} className={`border shadow-sm hover:shadow-lg transition-all bg-white ${isSelfWork ? 'border-amber-200' : 'border-gray-200'}`}>
+                          <CardHeader className={`border-b border-gray-200 pb-3 bg-gradient-to-r ${isSelfWork ? 'from-amber-50 to-amber-100/40' : 'from-[#3B2ED0]/10 to-[#F8FAFF]'}`}>
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3">
-                                <div className="h-10 w-10 bg-[#3B2ED0] rounded-lg flex items-center justify-center">
+                                <div className={`h-10 w-10 rounded-lg flex items-center justify-center ${isSelfWork ? 'bg-amber-500' : 'bg-[#3B2ED0]'}`}>
                                   <Building className="h-5 w-5 text-white" />
                                 </div>
                                 <div>
-                                  <h4 className="font-bold text-gray-900 text-base">{employer?.name || 'Unknown'}</h4>
-                                  <Badge variant="outline" className="text-xs mt-1 border-[#3B2ED0]/50 text-[#3B2ED0]">
-                                    {record.workers_count} worker{record.workers_count !== 1 ? 's' : ''}
+                                  <h4 className="font-bold text-gray-900 text-base">{employer?.name || '—'}</h4>
+                                  <Badge variant="outline" className={`text-xs mt-1 ${isSelfWork ? 'border-amber-500/50 text-amber-700' : 'border-[#3B2ED0]/50 text-[#3B2ED0]'}`}>
+                                    {record.workers_count} worker{record.workers_count !== 1 ? 's' : ''}{isSelfWork ? ' · own work' : ''}
                                   </Badge>
                                 </div>
                               </div>
