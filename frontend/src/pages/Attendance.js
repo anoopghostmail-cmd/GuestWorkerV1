@@ -14,7 +14,7 @@ import { Badge } from '../components/ui/badge';
 import { Checkbox } from '../components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
-import { CheckCircle, XCircle, Copy, Edit, Trash2, Lock, Users, Calendar, Building, UserCheck, Search, IndianRupee, AlertCircle, X, CalendarCheck, ArrowRight, Printer, FileDown, TrendingUp } from 'lucide-react';
+import { CheckCircle, XCircle, Copy, Edit, Trash2, Lock, Users, Calendar, Building, UserCheck, Search, IndianRupee, AlertCircle, X, CalendarCheck, ArrowRight, Printer, FileDown, TrendingUp, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDateToDDMMYYYY } from '../utils/dateUtils';
 
@@ -548,6 +548,29 @@ export default function Attendance() {
       }
     });
     setWorkerAttendance(updated);
+  };
+
+  // ✅ Reset every unsaved worker row back to Pending. Saved/locked rows are untouched.
+  const handleClearAll = () => {
+    const updated = {};
+    workers.forEach(w => {
+      const current = workerAttendance[w.id];
+      if (current?.locked || current?.saved) {
+        updated[w.id] = current;
+      } else {
+        updated[w.id] = { status: 'Pending', employer_id: '', locked: false, saved: false };
+      }
+    });
+    setWorkerAttendance(updated);
+  };
+
+  // ✅ Reset a single unsaved worker row back to Pending.
+  const handleClearWorker = (workerId) => {
+    setWorkerAttendance(prev => {
+      const current = prev[workerId];
+      if (current?.locked || current?.saved) return prev;
+      return { ...prev, [workerId]: { status: 'Pending', employer_id: '', locked: false, saved: false } };
+    });
   };
 
   const handleWorkerEmployerChange = (workerId, employerId) => {
@@ -1781,6 +1804,16 @@ export default function Attendance() {
                       <XCircle className="h-4 w-4 mr-2" />
                       Mark All Absent
                     </Button>
+                    <Button
+                      onClick={handleClearAll}
+                      size="sm"
+                      variant="outline"
+                      data-testid="worker-attendance-clear-all-btn"
+                      className="h-11 border-gray-300 text-gray-700 hover:bg-gray-50 font-medium"
+                    >
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                      Clear All
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -1951,6 +1984,18 @@ export default function Attendance() {
                               className="text-red-600 hover:bg-red-50 rounded-lg h-9 w-9 p-0"
                             >
                               <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {!state.locked && !state.saved && (state.status === 'Present' || state.status === 'Absent') && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleClearWorker(worker.id)}
+                              data-testid={`clear-worker-${worker.id}`}
+                              title="Clear (reset to Pending)"
+                              className="text-gray-500 hover:bg-gray-100 rounded-lg h-9 w-9 p-0"
+                            >
+                              <RotateCcw className="h-4 w-4" />
                             </Button>
                           )}
                         </div>
