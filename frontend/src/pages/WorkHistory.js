@@ -100,7 +100,7 @@ const PRESETS = {
 };
 
 // ---------- shared sub-components ----------
-function SummaryCards({ summary }) {
+function SummaryCards({ summary, hideEmployerStats = false }) {
   if (!summary) return null;
   const cards = [
     { label: 'Work Days Logged', value: summary.total_records ?? 0, icon: CalendarDays, color: 'text-blue-600 bg-blue-50' },
@@ -110,6 +110,11 @@ function SummaryCards({ summary }) {
     { label: 'Collected (From Employer)', value: fmtINR(summary.total_amount_collected), icon: TrendingUp, color: 'text-cyan-600 bg-cyan-50' },
     { label: 'Total Commission', value: fmtINR(summary.total_commission), icon: Award, color: 'text-pink-600 bg-pink-50' },
   ];
+  // ✅ Own Work tab: hide "Collected (From Employer)" and "Total Commission" cards.
+  // Both are zero for SELF days and only add noise.
+  const visibleCards = hideEmployerStats
+    ? cards.filter(c => c.label !== 'Collected (From Employer)' && c.label !== 'Total Commission')
+    : cards;
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
       {cards.map((c) => {
@@ -778,16 +783,16 @@ export default function WorkHistory() {
                       size="sm"
                       onClick={() => setOwnDatePreset(k)}
                       data-testid={`own-work-preset-${k}`}
-                      className={ownDatePreset === k ? 'bg-amber-600 hover:bg-amber-700' : ''}
+                      className={`text-xs ${ownDatePreset === k ? 'bg-amber-600 hover:bg-amber-700' : ''}`}
                     >
-                      {PRESETS[k].label}
+                      {PRESETS[k]().label}
                     </Button>
                   ))}
                   <Button
                     variant={ownDatePreset === 'custom' ? 'default' : 'outline'}
                     size="sm"
                     onClick={() => setOwnDatePreset('custom')}
-                    className={ownDatePreset === 'custom' ? 'bg-amber-600 hover:bg-amber-700' : ''}
+                    className={`text-xs ${ownDatePreset === 'custom' ? 'bg-amber-600 hover:bg-amber-700' : ''}`}
                   >
                     Custom
                   </Button>
