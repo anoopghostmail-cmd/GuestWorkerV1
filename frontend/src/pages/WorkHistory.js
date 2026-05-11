@@ -116,8 +116,8 @@ function SummaryCards({ summary, hideEmployerStats = false }) {
     ? cards.filter(c => c.label !== 'Collected (From Employer)' && c.label !== 'Total Commission')
     : cards;
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-      {cards.map((c) => {
+    <div className={`grid grid-cols-2 md:grid-cols-3 ${hideEmployerStats ? 'lg:grid-cols-4' : 'lg:grid-cols-6'} gap-3 mb-4`}>
+      {visibleCards.map((c) => {
         const Icon = c.icon;
         return (
           <Card key={c.label} className="border-slate-200">
@@ -525,7 +525,7 @@ export default function WorkHistory() {
 
     return (
       <div className="space-y-4">
-        <SummaryCards summary={data.summary} />
+        <SummaryCards summary={data.summary} hideEmployerStats={activeTab === 'own-work'} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <DayOfWeekBars breakdown={data.day_of_week_breakdown} />
