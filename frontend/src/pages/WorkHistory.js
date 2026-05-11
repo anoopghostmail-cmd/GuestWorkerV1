@@ -411,6 +411,10 @@ export default function WorkHistory() {
   const [selectedEmployer, setSelectedEmployer] = useState('');
   const [employerStart, setEmployerStart] = useState('');
   const [employerEnd, setEmployerEnd] = useState('');
+  // ✅ Own Work tab
+  const [ownDatePreset, setOwnDatePreset] = useState('this_month');
+  const [ownCustomStart, setOwnCustomStart] = useState('');
+  const [ownCustomEnd, setOwnCustomEnd] = useState('');
 
   // Data per tab
   const [data, setData] = useState(null);
@@ -449,12 +453,23 @@ export default function WorkHistory() {
         end_date: workerEnd ? workerEnd.split('-').reverse().join('-') : '',
       };
     }
+    if (activeTab === 'own-work') {
+      if (ownDatePreset === 'custom') {
+        return {
+          employer_id: 'SELF',
+          start_date: ownCustomStart ? ownCustomStart.split('-').reverse().join('-') : '',
+          end_date: ownCustomEnd ? ownCustomEnd.split('-').reverse().join('-') : '',
+        };
+      }
+      const p = PRESETS[ownDatePreset]?.() || PRESETS.this_month();
+      return { employer_id: 'SELF', start_date: p.start, end_date: p.end };
+    }
     return {
       employer_id: selectedEmployer || '',
       start_date: employerStart ? employerStart.split('-').reverse().join('-') : '',
       end_date: employerEnd ? employerEnd.split('-').reverse().join('-') : '',
     };
-  }, [activeTab, datePreset, customStart, customEnd, selectedWorker, workerStart, workerEnd, selectedEmployer, employerStart, employerEnd]);
+  }, [activeTab, datePreset, customStart, customEnd, selectedWorker, workerStart, workerEnd, selectedEmployer, employerStart, employerEnd, ownDatePreset, ownCustomStart, ownCustomEnd]);
 
   const fetchData = useCallback(async () => {
     // For worker/employer tabs, do not fetch until selection is made
@@ -495,6 +510,7 @@ export default function WorkHistory() {
             <div className="text-sm">
               {activeTab === 'by-worker' ? 'Select a worker to see their work history.' :
                activeTab === 'by-employer' ? 'Select an employer to see their work history.' :
+               activeTab === 'own-work' ? 'Pick a date range to see your Own / Self Work history.' :
                'Select a date range to view work history.'}
             </div>
           </CardContent>
@@ -590,10 +606,13 @@ export default function WorkHistory() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 mb-4">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 mb-4">
             <TabsTrigger value="by-date" className="gap-1.5"><CalendarDays className="w-4 h-4" /> By Date</TabsTrigger>
             <TabsTrigger value="by-worker" className="gap-1.5"><UserCheck className="w-4 h-4" /> By Worker</TabsTrigger>
             <TabsTrigger value="by-employer" className="gap-1.5"><Building2 className="w-4 h-4" /> By Employer</TabsTrigger>
+            <TabsTrigger value="own-work" data-testid="tab-own-work" className="gap-1.5 text-amber-700 data-[state=active]:bg-amber-50 data-[state=active]:text-amber-900">
+              <span className="text-base leading-none">🏠</span> Own Work
+            </TabsTrigger>
           </TabsList>
 
           {/* === BY DATE TAB === */}
@@ -734,6 +753,57 @@ export default function WorkHistory() {
                     </Button>
                   )}
                 </div>
+              </CardContent>
+            </Card>
+            {renderResults()}
+          </TabsContent>
+
+          {/* === OWN WORK TAB === */}
+          <TabsContent value="own-work" className="space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <span className="text-lg leading-none">🏠</span> Filter Own / Self Work
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Detailed report of attendance you marked as Own / Self Work. No commission is earned on these days — they show only worker wage costs.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {Object.keys(PRESETS).map((k) => (
+                    <Button
+                      key={k}
+                      variant={ownDatePreset === k ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setOwnDatePreset(k)}
+                      data-testid={`own-work-preset-${k}`}
+                      className={ownDatePreset === k ? 'bg-amber-600 hover:bg-amber-700' : ''}
+                    >
+                      {PRESETS[k].label}
+                    </Button>
+                  ))}
+                  <Button
+                    variant={ownDatePreset === 'custom' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setOwnDatePreset('custom')}
+                    className={ownDatePreset === 'custom' ? 'bg-amber-600 hover:bg-amber-700' : ''}
+                  >
+                    Custom
+                  </Button>
+                </div>
+                {ownDatePreset === 'custom' && (
+                  <div className="flex flex-wrap items-end gap-2 pt-1">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-slate-500">From</label>
+                      <Input type="date" value={ownCustomStart} onChange={(e) => setOwnCustomStart(e.target.value)} className="h-9 w-auto" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-slate-500">To</label>
+                      <Input type="date" value={ownCustomEnd} onChange={(e) => setOwnCustomEnd(e.target.value)} className="h-9 w-auto" />
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
             {renderResults()}
