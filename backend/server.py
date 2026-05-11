@@ -7712,22 +7712,40 @@ async def create_bulk_attendance(
             if employer_entry.selected_workers and len(employer_entry.selected_workers) > 0:
                 # Sum individual worker rates from employer (defaults / payment_per_worker NOT used here)
                 total_from_workers = 0.0
+                total_worker_wage = 0.0  # ✅ For SELF: track total wage to workers
                 for worker_id in employer_entry.selected_workers:
                     worker = await db.workers.find_one({"id": worker_id}, {"_id": 0})
                     if worker:
                         total_from_workers += float(worker.get("wage_from_employer", 0) or 0)
+                        total_worker_wage += float(worker.get("wage_per_day", 0) or 0)
                 # ✅ Extra payment per worker (skill bonus) is paid by employer for each selected worker
                 extra_total = float(employer_entry.extra_payment_per_worker or 0.0) * len(employer_entry.selected_workers)
-                total_amount = total_from_workers + extra_total + employer_entry.additional_charges
+                if is_self_work:
+                    # ✅ SELF: stored wage_amount = total wage GIVEN TO WORKERS (their wage_per_day + extras)
+                    # Skip additional_charges since SELF has no employer-side billing.
+                    total_amount = total_worker_wage + extra_total
+                else:
+                    total_amount = total_from_workers + extra_total + employer_entry.additional_charges
             # ✅ PRIORITY 2: If payment_per_worker is provided and no specific workers selected, use it
             elif employer_entry.payment_per_worker and employer_entry.payment_per_worker > 0:
                 # Use manual payment_per_worker * count
                 extra_total = float(employer_entry.extra_payment_per_worker or 0.0) * employer_entry.workers_count
-                total_amount = (employer_entry.workers_count * employer_entry.payment_per_worker) + extra_total + employer_entry.additional_charges
+                if is_self_work:
+                    # SELF with no specific worker → use default worker wage as the wage paid out
+                    pref = await db.contractor_preferences.find_one({"contractor_id": current_user.id}, {"_id": 0})
+                    default_wage = float(pref.get("default_worker_wage", 450.0)) if pref else 450.0
+                    total_amount = (employer_entry.workers_count * default_wage) + extra_total
+                else:
+                    total_amount = (employer_entry.workers_count * employer_entry.payment_per_worker) + extra_total + employer_entry.additional_charges
             else:
                 # Fallback: Use manual payment_per_worker * count (even if 0)
                 extra_total = float(employer_entry.extra_payment_per_worker or 0.0) * employer_entry.workers_count
-                total_amount = (employer_entry.workers_count * (employer_entry.payment_per_worker or 0)) + extra_total + employer_entry.additional_charges
+                if is_self_work:
+                    pref = await db.contractor_preferences.find_one({"contractor_id": current_user.id}, {"_id": 0})
+                    default_wage = float(pref.get("default_worker_wage", 450.0)) if pref else 450.0
+                    total_amount = (employer_entry.workers_count * default_wage) + extra_total
+                else:
+                    total_amount = (employer_entry.workers_count * (employer_entry.payment_per_worker or 0)) + extra_total + employer_entry.additional_charges
 
             if existing:
                 # Update existing employer record
