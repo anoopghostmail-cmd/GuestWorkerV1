@@ -11887,45 +11887,19 @@ async def get_landing_stats():
     # Total active employers
     total_employers = await db.employers.count_documents({"status": "Active"})
     
-    # Total payments processed - calculate maximum from all sources
-    # 1. Sum from employer_payments collection
-    pipeline_employer = [
-        {
-            "$group": {
-                "_id": None,
-                "total": {"$sum": "$amount_paid"}
-            }
-        }
-    ]
-    employer_result = await db.employer_payments.aggregate(pipeline_employer).to_list(length=1)
-    employer_payments = employer_result[0]["total"] if employer_result else 0
-    
-    # 2. Sum from employer_attendance collection (total_amount field)
-    pipeline_attendance = [
-        {
-            "$group": {
-                "_id": None,
-                "total": {"$sum": "$total_amount"}
-            }
-        }
-    ]
-    attendance_result = await db.employer_attendance.aggregate(pipeline_attendance).to_list(length=1)
-    attendance_payments = attendance_result[0]["total"] if attendance_result else 0
-    
-    # 3. Sum from employers' pending_payment field
-    pipeline_pending = [
-        {
-            "$group": {
-                "_id": None,
-                "total": {"$sum": "$pending_payment"}
-            }
-        }
-    ]
-    pending_result = await db.employers.aggregate(pipeline_pending).to_list(length=1)
-    pending_payments = pending_result[0]["total"] if pending_result else 0
-    
-    # Use the maximum value from all sources
-    total_payments = max(employer_payments, attendance_payments, pending_payments + employer_payments)
+    # Total payments processed across the platform
+    # = total wages settled to workers (wage_settlements.amount_paid)
+    # + total payments collected from employers (employer_payments.amount_paid)
+    # Spans ALL contractors/users on the platform.
+    sum_pipeline = [{"$group": {"_id": None, "total": {"$sum": "$amount_paid"}}}]
+
+    employer_result = await db.employer_payments.aggregate(sum_pipeline).to_list(length=1)
+    total_employer_collected = employer_result[0]["total"] if employer_result else 0
+
+    settlement_result = await db.wage_settlements.aggregate(sum_pipeline).to_list(length=1)
+    total_wages_settled = settlement_result[0]["total"] if settlement_result else 0
+
+    total_payments = (total_employer_collected or 0) + (total_wages_settled or 0)
     
     return {
         "total_contractors": total_contractors,
